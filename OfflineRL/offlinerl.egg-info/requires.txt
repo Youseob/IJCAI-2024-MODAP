@@ -1,0 +1,9 @@
+aim==2.0.27
+fire
+loguru
+gym
+sklearn
+gtimer
+numpy
+aioredis==1.3.1
+aiohttp==3.7.4

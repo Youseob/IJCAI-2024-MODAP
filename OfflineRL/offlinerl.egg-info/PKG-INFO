@@ -1,0 +1,14 @@
+Metadata-Version: 2.1
+Name: offlinerl
+Version: 0.0.1
+Summary: A Library for Offline RL(Batch RL)
+Home-page: https://agit.ai/Polixir/OfflineRL
+Author: SongyiGao
+Author-email: songyigao@gmail.com
+License: UNKNOWN
+Platform: UNKNOWN
+Requires-Python: >=3.7
+License-File: LICENSE
+
+UNKNOWN
+

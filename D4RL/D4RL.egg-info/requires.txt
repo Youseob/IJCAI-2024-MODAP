@@ -1,0 +1,6 @@
+gym<0.25.0
+numpy
+mujoco_py
+h5py
+termcolor
+click

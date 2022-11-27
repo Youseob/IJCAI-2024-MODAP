@@ -3,8 +3,6 @@ import numpy as np
 from copy import deepcopy
 from loguru import logger
 # import ray
-import wandb
-import uuid
 
 from offlinerl.utils.env import get_env
 from offlinerl.algo.base import BaseAlgo
@@ -23,8 +21,8 @@ from offlinerl.utils.net.maple_actor import Maple_actor
 from offlinerl.utils.net.model.maple_critic import Maple_critic
 from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
 from offlinerl.utils import loader
-
-
+import uuid
+import wandb
 def algo_init(args):
     logger.info('Run algo_init function')
 
@@ -71,11 +69,10 @@ def algo_init(args):
 class AlgoTrainer(BaseAlgo):
     def __init__(self, algo_init, args):
         super(AlgoTrainer, self).__init__(args)
-        self.args = args
-
+        self.args = args        
         wandb.init(
             config=self.args,
-            project=self.args["task"], # "d4rl-halfcheetah-medium-v0"
+            project=self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -158,6 +155,8 @@ class AlgoTrainer(BaseAlgo):
             if i % 100 == 0 or i == self.args['out_train_epoch'] - 1:
                 self.eval_one_trajectory()
             train_loss.update(eval_loss)
+            perf = self.eval_rollout_model(10, True)
+            train_loss.update(perf)
             torch.cuda.empty_cache()
             self.log_res(i, train_loss)
             if i%4 == 0:
@@ -281,10 +280,10 @@ class AlgoTrainer(BaseAlgo):
             hidden = (hidden_policy, lst_action)
             for i in range(self.args['horizon']):
                 act, hidden_policy = self.get_meta_action(obs, hidden, deterministic)
-                obs_action = torch.cat([obs,act], dim=-1)
+                obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)
-                next_obses = next_obs_dists.sample()
-                rewards = next_obses[:, :, -1:]
+                next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
+                rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
                 next_obses = next_obses[:, :, :-1]
 
                 next_obses_mode = next_obs_dists.mean[:, :, :-1]
@@ -333,6 +332,67 @@ class AlgoTrainer(BaseAlgo):
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
         return np.mean(uncertainty_list), np.max(uncertainty_max)
 
+    @torch.no_grad()
+    def eval_rollout_model(self, rollout_batch_size, deterministic=True):
+        batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
+        obs = batch['observations']
+        lst_action = batch['last_actions']
+
+        hidden_value_init = batch['value_hidden']
+        hidden_policy_init = batch['policy_hidden']
+
+        num_dynamics = len(self.transition.output_layer.select)
+        obs_max = torch.tensor(self.obs_max).to(self.device)
+        obs_min = torch.tensor(self.obs_min).to(self.device)
+        rew_max = self.rew_max
+        rew_min = self.rew_min
+
+        # uncertainty_list = []
+        # uncertainty_max = []
+
+        # current_nonterm = np.ones((len(obs)), dtype=bool)
+        # samples = None
+
+        obses = torch.from_numpy(obs).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
+        lst_action = torch.from_numpy(lst_action).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
+        hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
+        hidden = (hidden_policy, lst_action)
+        rt = 0
+        for i in range(self.args['horizon']):
+            # obs (num_dynamics * rollout_batch_size, dim)
+            acts, hidden_policies = self.get_meta_action(obses, hidden, deterministic=True)
+            # (num_dynamics, rollout_batch_size, dim)
+            obs_action = torch.cat([obses,acts], dim=-1).reshape(num_dynamics, rollout_batch_size, -1) # (num_dynamics, 500000 : rollout_batch_size, 18)
+            next_obs_dists = self.transition(obs_action)
+            next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
+            rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
+            next_obses = next_obses[:, :, :-1] # (num_dynamics, rollout_batch_size, obs_dim)
+            
+            next_obses = torch.clamp(next_obses, obs_min, obs_max)
+            rewards = torch.clamp(rewards, rew_min, rew_max)
+            rt += rewards
+
+            # (num_dynamics * rollout_batch_size, obs_dim)
+            obses = next_obses.view(num_dynamics*rollout_batch_size, -1)
+            lst_action = acts
+            hidden = (hidden_policies, lst_action)
+        
+        res = OrderedDict()
+        rt_mean = rt.mean(1)
+        res.update({
+            "Average Perf" : rt_mean.mean().item(),
+            "Max Perf" : rt_mean.max().item(),
+            "Min Perf" : rt_mean.min().item(),
+        })
+        for task in range(num_dynamics):
+            res.update({
+                f"{task}-th Perf" : rt_mean[task].item()
+            })
+
+        print(f"Average Perf :{rt_mean.mean().item()}")
+        print(f"Max Perf: {rt_mean.max().item()}")
+        print(f"Min Perf: {rt_mean.min().item()}")
+        return res
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -510,4 +570,3 @@ class AlgoTrainer(BaseAlgo):
                 lengths += 1
             print("======== Action Mean mean: {}, Action Std mean: {}, Reward: {}, Length: {} ========"\
                 .format(np.mean(np.array(mu_list), axis=0), np.mean(np.array(std_list), axis=0), reward, lengths))
-            

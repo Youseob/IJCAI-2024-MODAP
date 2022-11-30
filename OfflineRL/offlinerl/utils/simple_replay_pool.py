@@ -124,6 +124,7 @@ class SimpleReplayPool(FlexibleReplayPool):
 
 
 class SimpleReplayTrajPool(FlexibleReplayPool):
+    # If using explicit belief, hidden 
     def __init__(self, observation_space, action_space, max_traj_len, hidden_length, *args, **kwargs):
         self._observation_space = observation_space
         self._action_space = action_space
@@ -160,10 +161,12 @@ class SimpleReplayTrajPool(FlexibleReplayPool):
                 'shape': (self.max_traj_len, *self._observation_space.shape),
                 'dtype': 'float32'
             },
+            # policy_hidden = belief
             'policy_hidden': {
                 'shape': (self.max_traj_len, self.hidden_length),
                 'dtype': 'float32'
             },
+            # value_hidden = next belief
             'value_hidden': {
                 'shape': (self.max_traj_len, self.hidden_length),
                 'dtype': 'float32'

@@ -27,7 +27,7 @@ def allocate_hidden_state(replay_pool_full_traj, get_action, make_hidden):
     state = replay_pool_full_traj
     pass
 
-def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5, policy_hook=None,value_hook=None,device=None,fake_env=None):
+def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5, policy_hook=None,value_hook=None, model_hook=None, device=None,fake_env=None):
     import gym
     import d4rl
     if 'sac_data' in name:
@@ -53,6 +53,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5, policy_hook=None,
 
     get_policy_hidden = policy_hook if policy_hook else None
     get_value_hidden = value_hook if value_hook else None
+    get_model = model_hook if model_hook else None
     data['rewards'] = np.expand_dims(data['rewards'], axis=1)
     data['terminals'] = np.expand_dims(data['terminals'], axis=1)
     data['last_actions'] = np.concatenate((np.zeros((1, data['actions'].shape[1]), dtype=np.float32), data['actions'][:-1, :]), axis=0).copy()
@@ -106,13 +107,16 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5, policy_hook=None,
                 actions[ind, :item] = data['actions'][start_ind:(start_ind+item)]
                 start_ind += item
             with torch.no_grad():
+                # states (400, 999, 17) lst_action (400, 999, 6), 
                 policy_hidden_out = get_policy_hidden.get_hidden(torch.from_numpy(states).to(device),\
                                                                  torch.from_numpy(lst_actions).to(device), torch.IntTensor(traj_lens_it))
                 value_hidden_out = get_value_hidden.get_hidden(torch.from_numpy(states).to(device),\
                                                                torch.from_numpy(lst_actions).to(device), torch.IntTensor(traj_lens_it))
             max_len = max(traj_lens_it)
+            
+            import ipdb; ipdb.set_trace()
             policy_hidden = np.concatenate((np.zeros((len(traj_lens_it), 1, policy_hidden_out.shape[-1]), dtype=np.float32),
-                                            policy_hidden_out[:, :-1].cpu().detach().numpy()), axis=-2)
+                                            policy_hidden_out[:, :-1].cpu().detach().numpy()), axis=-2) # 
             value_hidden = np.concatenate((np.zeros((len(traj_lens_it), 1, value_hidden_out.shape[-1]), dtype=np.float32),
                                            value_hidden_out[:, :-1].cpu().detach().numpy()), axis=-2)
             start_ind = last_start_ind
@@ -124,7 +128,75 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5, policy_hook=None,
                 data['value_hidden'][start_ind:(start_ind + item)] = value_hidden[ind, :item]
                 start_ind += item
             last_start_ind = start_ind
-    print('[ DEBUG ]: inferring hidden state done')
+    
+    elif adapt and model_hook is not None:
+        num_dynamics = belief_dim = replay_pool.hidden_length
+        # making init belif state
+        # 1, making state and lst action
+        data['policy_hidden'] = None # np.zeros((data['last_actions'].shape[0], policy_hidden.shape[-1]))
+        data['value_hidden'] = None # np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]))
+        last_start_ind = 0
+        traj_num_to_infer = 100
+        for i_ter in range(int(np.ceil(traj_num / traj_num_to_infer))):
+            traj_lens_it = traj_lens[traj_num_to_infer * i_ter : min(traj_num_to_infer * (i_ter + 1), traj_num)]
+            states = np.zeros((len(traj_lens_it), max_traj_len, data['observations'].shape[-1]), dtype=np.float32)
+            actions = np.zeros((len(traj_lens_it), max_traj_len, data['actions'].shape[-1]), dtype=np.float32)
+            rewards = np.zeros((len(traj_lens_it), max_traj_len, data['rewards'].shape[-1]), dtype=np.float32)
+            next_states = np.zeros((len(traj_lens_it), max_traj_len, data['next_observations'].shape[-1]), dtype=np.float32)
+            start_ind = last_start_ind
+            for ind, item in enumerate(traj_lens_it):
+                states[ind, :item] = data['observations'][start_ind:(start_ind+item)]
+                actions[ind, :item] = data['actions'][start_ind:(start_ind+item)]
+                rewards[ind, :item] = data['rewards'][start_ind:(start_ind+item)]
+                next_states[ind, :item] = data['next_observations'][start_ind:(start_ind+item)]
+                start_ind += item
+            with torch.no_grad():
+                # states (400, 999
+                obs_action = torch.cat([torch.from_numpy(states).to(device), torch.from_numpy(actions).to(device)], dim=-1) # bs, seq_len, dim
+                next_obs_dists = get_model(obs_action.reshape(len(traj_lens_it)*max_traj_len, -1)) # bs*seq_len, dim -> (num_dynamics, bs*seq_len, dim)
+                next_obses = torch.cat([torch.from_numpy(next_states).to(device), torch.from_numpy(rewards).to(device)], dim=-1).reshape(len(traj_lens_it)*max_traj_len, -1) # bs*seq_len, dim
+                log_probs = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs*seq_len)
+                # (num_dynamics, bs*seq_len)
+            max_len = max(traj_lens_it)
+            
+            ### TODO Full trajectory update
+            # policy_hiddn  == belief
+            policy_hidden = np.ones( (len(traj_lens_it), max_traj_len, belief_dim), dtype=np.float32 ) / belief_dim
+            # value_hidden == next_belief
+            value_hidden = np.ones( (len(traj_lens_it), max_traj_len, belief_dim), dtype=np.float32 ) / belief_dim
+            
+
+            belief = torch.ones(len(traj_lens_it), belief_dim).to(device) / belief_dim # (bs, num_dynamics)
+            log_probs = log_probs.reshape(num_dynamics, len(traj_lens_it), max_traj_len)
+            log_probs = torch.clamp(log_probs, -20, 5.)
+            for seq_idx in range(max_traj_len):
+                next_belief = belief * torch.exp(log_probs[:, :, seq_idx]).T # (num_dynaics, len(traj_lens_it) ).T
+                next_belief /= next_belief.sum(-1, keepdim=True)
+                if torch.isnan(next_belief).any():
+                    import ipdb; ipdb.set_trace()
+                policy_hidden[:, seq_idx, :] = belief.cpu().detach().numpy()
+                value_hidden[:, seq_idx, :] = next_belief.cpu().detach().numpy()
+                belief = next_belief
+            import ipdb; ipdb.set_trace()
+
+            ### TODO ONE STEP trajectory update
+            # policy_hidden = np.ones( (len(traj_lens_it), max_traj_len, belief_dim), dtype=np.float32 ) / belief_dim
+            # policy_hidden = np.ones( (len(traj_lens_it), max_traj_len, belief_dim), dtype=np.float32 ) / belief_dim
+            
+
+            ####
+            #######################################
+            start_ind = last_start_ind
+            for ind, item in enumerate(traj_lens_it):
+                if data['policy_hidden'] is None:
+                    data['policy_hidden'] = np.zeros((data['last_actions'].shape[0], policy_hidden.shape[-1]), dtype=np.float32)
+                    data['value_hidden'] = np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]), dtype=np.float32)
+                data['policy_hidden'][start_ind:(start_ind + item)] = policy_hidden[ind, :item]
+                data['value_hidden'][start_ind:(start_ind + item)] = value_hidden[ind, :item]
+                start_ind += item
+            last_start_ind = start_ind
+    
+        print('[ DEBUG ]: inferring hidden state done by using transition model')
     data_target = {k: replay_pool.fields[k] for k in replay_pool.fields}
     traj_target_ind = 0
     mini_target_ind = 0

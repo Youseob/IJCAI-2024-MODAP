@@ -1,4 +1,5 @@
 import torch
+from torch.distributions import Normal
 import numpy as np
 from copy import deepcopy
 from loguru import logger
@@ -16,10 +17,10 @@ from offlinerl.utils.net.terminal_check import is_terminal
 
 from offlinerl.utils.data import ModelBuffer
 from offlinerl.utils.net.model.ensemble import EnsembleTransition
-from offlinerl.utils.net.model_GRU import GRU_Model
 from offlinerl.utils.net.maple_actor import Maple_actor
 from offlinerl.utils.net.model.maple_critic import Maple_critic
 from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
+
 from offlinerl.utils import loader
 import uuid
 import wandb
@@ -45,24 +46,25 @@ def algo_init(args):
                                     args['transition_init_num'], mode=args['mode']).to(args['device'])
     transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
 
-    policy_gru = GRU_Model(args['obs_shape'], args['action_shape'], args['device'],args['lstm_hidden_unit']).to(args['device'])
-    value_gru = GRU_Model(args['obs_shape'], args['action_shape'], args['device'], args['lstm_hidden_unit']).to(args['device'])
-    actor = Maple_actor(args['obs_shape'], args['action_shape']).to(args['device'])
-    q1 = Maple_critic(args['obs_shape'], args['action_shape']).to(args['device'])
-    q2 = Maple_critic(args['obs_shape'], args['action_shape']).to(args['device'])
 
-    actor_optim = torch.optim.Adam([*policy_gru.parameters(),*actor.parameters()], lr=args['actor_lr'])
+    # lstm_hidden_unit: dim(belief_vector)
+    ###################################################
+    actor = Maple_actor(args['obs_shape'], args['action_shape'], lstm_hidden_unit=args["transition_select_num"]).to(args['device'])
+    q1 = Maple_critic(args['obs_shape'], args['action_shape'], lstm_hidden_unit=args["transition_select_num"]).to(args['device'])
+    q2 = Maple_critic(args['obs_shape'], args['action_shape'], lstm_hidden_unit=args["transition_select_num"]).to(args['device'])
+    ###################################################
+
+    actor_optim = torch.optim.Adam(actor.parameters(), lr=args['actor_lr'])
+    critic_optim = torch.optim.Adam([*q1.parameters(), *q2.parameters()], lr=args['critic_lr'])
 
     log_alpha = torch.zeros(1, requires_grad=True, device=args['device'])
     alpha_optimizer = torch.optim.Adam([log_alpha], lr=args["actor_lr"])
 
-    critic_optim = torch.optim.Adam([*value_gru.parameters(),*q1.parameters(), *q2.parameters()], lr=args['critic_lr'])
-
     return {
         "transition": {"net": transition, "opt": transition_optim},
-        "actor": {"net": [policy_gru,actor], "opt": actor_optim},
+        "actor": {"net": actor, "opt": actor_optim},
         "log_alpha": {"net": log_alpha, "opt": alpha_optimizer},
-        "critic": {"net": [value_gru, q1, q2], "opt": critic_optim},
+        "critic": {"net": [q1, q2], "opt": critic_optim},
     }
 
 
@@ -81,13 +83,13 @@ class AlgoTrainer(BaseAlgo):
         self.transition_optim = algo_init['transition']['opt']
         self.selected_transitions = None
 
-        self.policy_gru, self.actor = algo_init['actor']['net']
+        self.actor = algo_init['actor']['net']
         self.actor_optim = algo_init['actor']['opt']
 
         self.log_alpha = algo_init['log_alpha']['net']
         self.log_alpha_optim = algo_init['log_alpha']['opt']
 
-        self.value_gru, self.q1, self.q2 = algo_init['critic']['net']
+        self.q1, self.q2 = algo_init['critic']['net']
         self.target_q1 = deepcopy(self.q1)
         self.target_q2 = deepcopy(self.q2)
         self.critic_optim = algo_init['critic']['opt']
@@ -110,16 +112,17 @@ class AlgoTrainer(BaseAlgo):
         if self.args['only_dynamics']:
             return
         self.transition.requires_grad_(False)
-
+        ###################################################################################################################
+        
         env_pool_size = int((train_buffer.shape[0]/self.args['horizon']) * 1.2)
         self.env_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
-                                             self.args['lstm_hidden_unit'], env_pool_size)
+                                             self.args['transition_select_num'], env_pool_size)
         self.model_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
-                                               self.args['lstm_hidden_unit'],self.args['model_pool_size'])
+                                               self.args['transition_select_num'],self.args['model_pool_size'])
 
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
-                                 maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
-                                 value_hook=self.value_gru, device=self.device)
+                                 maxlen=self.args['horizon'], policy_hook=None,\
+                                 value_hook=None, model_hook=self.transition, device=self.device)
         torch.cuda.empty_cache()
         self.obs_max = train_buffer['obs'].max(axis=0)
         self.obs_min = train_buffer['obs'].min(axis=0)
@@ -135,6 +138,7 @@ class AlgoTrainer(BaseAlgo):
 
         for i in range(self.args['out_train_epoch']):
             uncertainty_mean, uncertainty_max = self.rollout_model(self.args['rollout_batch_size'])
+            
             torch.cuda.empty_cache()
 
             train_loss = {}
@@ -159,10 +163,10 @@ class AlgoTrainer(BaseAlgo):
             train_loss.update(perf)
             torch.cuda.empty_cache()
             self.log_res(i, train_loss)
-            if i%4 == 0:
-                loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
-                                 maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
-                                 value_hook=self.value_gru, device=self.device)
+            # if i%4 == 0:
+            #     loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
+            #                      maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
+            #                      value_hook=self.value_gru, device=self.device)
             torch.cuda.empty_cache()
 
     def get_train_policy_batch(self, batch_size = None):
@@ -186,30 +190,20 @@ class AlgoTrainer(BaseAlgo):
     def get_policy(self):
         return self.policy_gru , self.actor
 
-    def get_meta_action(self, state, hidden,deterministic=False, out_mean_std=False):
-        if len(state.shape) == 2:
-            state = torch.unsqueeze(state, dim=1)
-        lens = [1] *state.shape[0]
-        hidden_policy, lst_action = hidden
-        if len(hidden_policy.shape) == 2:
-            hidden_policy = torch.unsqueeze(hidden_policy, dim=0)
-        if len(lst_action.shape) == 2:
-            lst_action = torch.unsqueeze(lst_action, dim=1)
-        
-        hidden_policy_res = self.policy_gru(state,lst_action,hidden_policy, lens)
-        mu_res, action_res, log_p_res, std_res = self.actor(hidden_policy_res, state)
-        hidden_policy_res = torch.squeeze(hidden_policy_res, dim=1)
-        action_res = torch.squeeze(action_res, dim=1)
-        mu_res = torch.squeeze(mu_res, dim=1)
-        std_res = torch.squeeze(std_res, dim=1)
+    def get_meta_action(self, state, belief ,deterministic=False, out_mean_std=False):
+
+        mu_res, action_res, log_p_res, std_res = self.actor(belief, state)
+        # action_res = torch.squeeze(action_res, dim=1)
+        # mu_res = torch.squeeze(mu_res, dim=1)
+        # std_res = torch.squeeze(std_res, dim=1)
 
         if out_mean_std:
-            return mu_res, action_res, std_res, hidden_policy_res
+            return mu_res, action_res, std_res
 
         if deterministic:
-            return mu_res, hidden_policy_res
+            return mu_res
         else:
-            return action_res , hidden_policy_res
+            return action_res
 
     def train_transition(self, buffer):
         data_size = len(buffer)
@@ -255,14 +249,18 @@ class AlgoTrainer(BaseAlgo):
         return self.transition
 
     def rollout_model(self,rollout_batch_size, deterministic=False):
+        
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
-        # import ipdb; ipdb.set_trace()
         obs = batch['observations']
-        lst_action = batch['last_actions']
+        num_dynamics = len(self.transition.output_layer.select)
+        # lst_action = batch['last_actions']
 
-        hidden_value_init = batch['value_hidden']
-        hidden_policy_init = batch['policy_hidden']
-
+        # hidden_value_init = batch['value_hidden']
+        # hidden_policy_init = batch['policy_hidden']
+        
+        # Unif
+        belief = torch.ones(rollout_batch_size, num_dynamics).to(self.device) / num_dynamics
+        
         obs_max = torch.tensor(self.obs_max).to(self.device)
         obs_min = torch.tensor(self.obs_min).to(self.device)
         rew_max = self.rew_max
@@ -276,15 +274,16 @@ class AlgoTrainer(BaseAlgo):
         with torch.no_grad():
             model_indexes = None
             obs = torch.from_numpy(obs).to(self.device)
-            lst_action = torch.from_numpy(lst_action).to(self.device)
-            hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)
-            hidden = (hidden_policy, lst_action)
+            # lst_action = torch.from_numpy(lst_action).to(self.device)
+            # hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)
+            # hidden = (hidden_policy, lst_action)
             for i in range(self.args['horizon']):
-                # import ipdb; ipdb.set_trace()
-                act, hidden_policy = self.get_meta_action(obs, hidden, deterministic)
+                act = self.get_meta_action(obs, belief, deterministic)
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)
                 next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
+                log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
+                # log_probs = next_obs_dists.log_prob(next_obses[None, ...].repeat(num_dynamics, 1, 1, 1)).sum(-1) # (num_dynamics, num_dynamics, rollout_batch_size)
                 rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
                 next_obses = next_obses[:, :, :-1]
 
@@ -300,13 +299,17 @@ class AlgoTrainer(BaseAlgo):
                 uncertainty_max.append(uncertainty.max().item())
                 if model_indexes is None:
                     model_indexes = np.random.randint(0, next_obses.shape[0], size=(obs.shape[0]))
-                next_obs = next_obses[model_indexes, np.arange(obs.shape[0])]
+                next_obs = next_obses[model_indexes, np.arange(obs.shape[0])] # 50000, obs_dim
                 reward = rewards[model_indexes, np.arange(obs.shape[0])]
+                log_prob = torch.stack([log_probs[index][model_indexes, np.arange(obs.shape[0])] for index in range(num_dynamics)]) # num_dynamics, 500000
 
                 term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
                 next_obs = torch.clamp(next_obs, obs_min, obs_max)
                 reward = torch.clamp(reward, rew_min, rew_max)
-
+                log_probs = torch.clamp(log_probs, -20, 5.)
+                # log_prob = torch.clamp(log_prob, -20., 20.)
+                next_belief = belief * torch.exp(log_prob).T # 50000, num_dynamics
+                next_belief /= next_belief.sum(-1, keepdim=True)
                 print('average reward:', reward.mean().item())
                 print('average uncertainty:', uncertainty.mean().item())
 
@@ -316,9 +319,9 @@ class AlgoTrainer(BaseAlgo):
                 #nonterm_mask: 1-not done, 0-done
                 samples = {'observations': obs.cpu().numpy(), 'actions': act.cpu().numpy(), 'next_observations': next_obs.cpu().numpy(),
                            'rewards': penalized_reward.cpu().numpy(), 'terminals': term,
-                           'last_actions': lst_action.cpu().numpy(),
+                        #    'last_actions': lst_action.cpu().numpy(),
                            'valid': current_nonterm.reshape(-1, 1),
-                           'value_hidden': hidden_value_init, 'policy_hidden': hidden_policy_init} 
+                           'value_hidden': belief.cpu().numpy(), 'policy_hidden': next_belief.cpu().numpy()} 
                 samples = {k: np.expand_dims(v, 1) for k, v in samples.items()}
                 num_samples = samples['observations'].shape[0]
                 index = np.arange(
@@ -327,74 +330,12 @@ class AlgoTrainer(BaseAlgo):
                     self.model_pool.fields[k][index, i] = samples[k][:, 0]
                 current_nonterm = current_nonterm & nonterm_mask
                 obs = next_obs
-                lst_action = act
-                hidden = (hidden_policy, lst_action)
+                belief = next_belief
+
             self.model_pool._pointer += num_samples
             self.model_pool._pointer %= self.model_pool._max_size
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
         return np.mean(uncertainty_list), np.max(uncertainty_max)
-
-    @torch.no_grad()
-    def eval_rollout_model(self, rollout_batch_size, deterministic=True):
-        batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
-        obs = batch['observations']
-        lst_action = batch['last_actions']
-
-        hidden_value_init = batch['value_hidden']
-        hidden_policy_init = batch['policy_hidden']
-
-        num_dynamics = len(self.transition.output_layer.select)
-        obs_max = torch.tensor(self.obs_max).to(self.device)
-        obs_min = torch.tensor(self.obs_min).to(self.device)
-        rew_max = self.rew_max
-        rew_min = self.rew_min
-
-        # uncertainty_list = []
-        # uncertainty_max = []
-
-        # current_nonterm = np.ones((len(obs)), dtype=bool)
-        # samples = None
-
-        obses = torch.from_numpy(obs).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
-        lst_action = torch.from_numpy(lst_action).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
-        hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
-        hidden = (hidden_policy, lst_action)
-        rt = 0
-        for i in range(self.args['horizon']):
-            # obs (num_dynamics * rollout_batch_size, dim)
-            acts, hidden_policies = self.get_meta_action(obses, hidden, deterministic=True)
-            # (num_dynamics, rollout_batch_size, dim)
-            obs_action = torch.cat([obses,acts], dim=-1).reshape(num_dynamics, rollout_batch_size, -1) # (num_dynamics, 500000 : rollout_batch_size, 18)
-            next_obs_dists = self.transition(obs_action)
-            next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
-            rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
-            next_obses = next_obses[:, :, :-1] # (num_dynamics, rollout_batch_size, obs_dim)
-            
-            next_obses = torch.clamp(next_obses, obs_min, obs_max)
-            rewards = torch.clamp(rewards, rew_min, rew_max)
-            rt += rewards
-
-            # (num_dynamics * rollout_batch_size, obs_dim)
-            obses = next_obses.view(num_dynamics*rollout_batch_size, -1)
-            lst_action = acts
-            hidden = (hidden_policies, lst_action)
-        
-        res = OrderedDict()
-        rt_mean = rt.mean(1)
-        res.update({
-            "Average Perf" : rt_mean.mean().item(),
-            "Max Perf" : rt_mean.max().item(),
-            "Min Perf" : rt_mean.min().item(),
-        })
-        for task in range(num_dynamics):
-            res.update({
-                f"{task}-th Perf" : rt_mean[task].item()
-            })
-
-        print(f"Average Perf :{rt_mean.mean().item()}")
-        print(f"Max Perf: {rt_mean.max().item()}")
-        print(f"Min Perf: {rt_mean.min().item()}")
-        return res
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -402,30 +343,24 @@ class AlgoTrainer(BaseAlgo):
         max_len = np.max(lens)
         for k in batch:
             batch[k] = torch.from_numpy(batch[k][:,:max_len]).to(self.device)
-        value_hidden = batch['value_hidden'][:,0]
-        policy_hidden = batch['policy_hidden'][:,0]
-        value_state = self.value_gru(batch['observations'], batch['last_actions'],value_hidden,lens)
-        policy_state = self.policy_gru(batch['observations'], batch['last_actions'], policy_hidden, lens)
-        lens_next = torch.ones(len(lens)).int()
-        next_value_hidden = value_state[:,-1]
-        next_policy_hidden = policy_state[:,-1]
-        value_state_next = self.value_gru(batch['next_observations'][:,-1:],\
-                                          batch['actions'][:,-1:],next_value_hidden,lens_next)
-        policy_state_next = self.policy_gru(batch['next_observations'][:,-1:],\
-                                            batch['actions'][:,-1:],next_policy_hidden,lens_next)
+        belief = batch['policy_hidden']
+        next_belief = batch['value_hidden']
+        # value_state = self.value_gru(batch['observations'], batch['last_actions'],value_hidden,lens)
+        # policy_state = self.policy_gru(batch['observations'], batch['last_actions'], policy_hidden, lens)
+        # lens_next = torch.ones(len(lens)).int()
 
-        value_state_next = torch.cat([value_state[:,1:],value_state_next],dim=1)
-        policy_state_next = torch.cat([policy_state[:,1:],policy_state_next],dim=1)
+        # value_state_next = torch.cat([value_state[:,1:],value_state_next],dim=1)
+        # policy_state_next = torch.cat([policy_state[:,1:],policy_state_next],dim=1)
 
-        q1 = self.q1(value_state,batch['actions'],batch['observations'])
-        q2 = self.q2(value_state,batch['actions'],batch['observations'])
+        q1 = self.q1(belief,batch['actions'],batch['observations'])
+        q2 = self.q2(belief,batch['actions'],batch['observations'])
         valid_num = torch.sum(batch['valid'])
         
         with torch.no_grad():
-            mu_target, act_target, log_p_act_target, std_target = self.actor(policy_state_next,\
+            mu_target, act_target, log_p_act_target, std_target = self.actor(next_belief,\
                                                                              batch['next_observations'])
-            q1_target = self.target_q1(value_state_next,act_target,batch['next_observations'])
-            q2_target = self.target_q2(value_state_next,act_target,batch['next_observations'])
+            q1_target = self.target_q1(next_belief,act_target,batch['next_observations'])
+            q2_target = self.target_q2(next_belief,act_target,batch['next_observations'])
             Q_target = torch.min(q1_target,q2_target)
             alpha = torch.exp(self.log_alpha)
             Q_target = Q_target - alpha*torch.unsqueeze(log_p_act_target,dim=-1)
@@ -444,7 +379,7 @@ class AlgoTrainer(BaseAlgo):
         self._sync_weight(self.target_q1, self.q1, soft_target_tau=self.args['soft_target_tau'])
         self._sync_weight(self.target_q2, self.q2, soft_target_tau=self.args['soft_target_tau'])
 
-        mu_now, act_now, log_p_act_now, std_now = self.actor(policy_state, batch['observations'])
+        mu_now, act_now, log_p_act_now, std_now = self.actor(belief, batch['observations'])
         log_p_act_now = torch.unsqueeze(log_p_act_now, dim=-1)
 
         if self.args['learnable_alpha']:
@@ -455,8 +390,8 @@ class AlgoTrainer(BaseAlgo):
             self.log_alpha_optim.zero_grad()
             alpha_loss.backward()
             self.log_alpha_optim.step()
-        q1_ = self.q1(value_state.detach(), act_now, batch['observations'])
-        q2_ = self.q2(value_state.detach(), act_now, batch['observations'])
+        q1_ = self.q1(belief, act_now, batch['observations'])
+        q2_ = self.q2(belief, act_now, batch['observations'])
         min_q_ = torch.min(q1_, q2_)
         policy_loss = alpha*log_p_act_now - min_q_
         policy_loss = torch.sum(policy_loss*batch['valid'])/valid_num
@@ -528,22 +463,36 @@ class AlgoTrainer(BaseAlgo):
         env = deepcopy(env)
         with torch.no_grad():
             state, done = env.reset(), False
-            lst_action = torch.zeros((1,1,self.args['action_shape'])).to(self.device)
-            hidden_policy = torch.zeros((1,1,self.args['lstm_hidden_unit'])).to(self.device)
+            belief = torch.ones((1,self.args['transition_select_num'])).to(self.device) / self.args['transition_select_num']
+            # hidden_policy = torch.zeros((1,1,self.args['lstm_hidden_unit'])).to(self.device)
             rewards = 0
             lengths = 0
+            state = state[np.newaxis]  
+            state = torch.from_numpy(state).float().to(self.device)
             while not done:
-                state = state[np.newaxis]  
-                state = torch.from_numpy(state).float().to(self.device)
-                hidden = (hidden_policy, lst_action)
-                action, hidden_policy = self.get_meta_action(state, hidden, deterministic=True)
+                # hidden = (hidden_policy, lst_action)
+                action = self.get_meta_action(state, belief, deterministic=True)
                 use_action = action.cpu().numpy().reshape(-1)
-                state_next, reward, done, _ = env.step(use_action)
-                lst_action = action
-                state = state_next
+                next_state, reward, done, _ = env.step(use_action)
                 rewards += reward
+                next_state = torch.from_numpy(next_state[None, ...]).float().to(self.device)
+                reward = torch.from_numpy(reward[None, None, ...]).float().to(self.device)
+                belief = self.belief_update(state, action, next_state, reward, belief)
+                # lst_action = action
+                state = next_state
                 lengths += 1
         return (rewards, lengths)
+    
+    @torch.no_grad()
+    def belief_update(self, state, action ,next_state, reward, belief):
+        obs_action = torch.cat([state, action], dim=-1) # bs, dim
+        next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
+        next_obses = torch.cat([next_state, reward], dim=-1) # bs, dim
+        log_probs = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
+        log_probs = torch.clamp(log_probs, -20, 5.)
+        next_belief = belief * torch.exp(log_probs).T # bs, num_dynamics        
+        next_belief /= next_belief.sum(-1, keepdim=True)
+        return next_belief
 
     # to check the mean of actions
     def eval_one_trajectory(self):

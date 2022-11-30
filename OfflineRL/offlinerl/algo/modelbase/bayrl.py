@@ -159,7 +159,7 @@ class AlgoTrainer(BaseAlgo):
             # if i % 100 == 0 or i == self.args['out_train_epoch'] - 1:
             #     self.eval_one_trajectory()
             train_loss.update(eval_loss)
-            perf = self.eval_rollout_model(10, True)
+            # perf = self.eval_rollout_model(10, True)
             train_loss.update(perf)
             torch.cuda.empty_cache()
             self.log_res(i, train_loss)

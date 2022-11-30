@@ -160,14 +160,14 @@ class AlgoTrainer(BaseAlgo):
             #     self.eval_one_trajectory()
             train_loss.update(eval_loss)
             # perf = self.eval_rollout_model(10, True)
-            train_loss.update(perf)
+            # train_loss.update(perf)
             torch.cuda.empty_cache()
             self.log_res(i, train_loss)
             # if i%4 == 0:
             #     loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
             #                      maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
             #                      value_hook=self.value_gru, device=self.device)
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
 
     def get_train_policy_batch(self, batch_size = None):
         batch_size = batch_size or self.args['train_batch_size']

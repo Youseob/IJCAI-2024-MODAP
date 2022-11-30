@@ -177,7 +177,6 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5, policy_hook=None,
                 policy_hidden[:, seq_idx, :] = belief.cpu().detach().numpy()
                 value_hidden[:, seq_idx, :] = next_belief.cpu().detach().numpy()
                 belief = next_belief
-            import ipdb; ipdb.set_trace()
 
             ### TODO ONE STEP trajectory update
             # policy_hidden = np.ones( (len(traj_lens_it), max_traj_len, belief_dim), dtype=np.float32 ) / belief_dim

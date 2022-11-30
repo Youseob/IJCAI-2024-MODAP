@@ -156,8 +156,8 @@ class AlgoTrainer(BaseAlgo):
             
             # evaluate in mujoco
             eval_loss = self.eval_policy()
-            if i % 100 == 0 or i == self.args['out_train_epoch'] - 1:
-                self.eval_one_trajectory()
+            # if i % 100 == 0 or i == self.args['out_train_epoch'] - 1:
+            #     self.eval_one_trajectory()
             train_loss.update(eval_loss)
             perf = self.eval_rollout_model(10, True)
             train_loss.update(perf)
@@ -494,30 +494,30 @@ class AlgoTrainer(BaseAlgo):
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief
 
-    # to check the mean of actions
-    def eval_one_trajectory(self):
-        env = get_env(self.args['task'])
-        env = deepcopy(env)
-        with torch.no_grad():
-            state, done = env.reset(), False
-            lst_action = torch.zeros((1,1,self.args['action_shape'])).to(self.device)
-            hidden_policy = torch.zeros((1,1,self.args['lstm_hidden_unit'])).to(self.device)
-            rewards = 0
-            lengths = 0
-            mu_list = []
-            std_list = []
-            while not done:
-                state = state[np.newaxis]
-                state = torch.from_numpy(state).float().to(self.device)
-                hidden = (hidden_policy, lst_action)
-                mu, action, std, hidden_policy = self.get_meta_action(state, hidden, deterministic=True, out_mean_std=True)
-                mu_list.append(mu.cpu().numpy())
-                std_list.append(std.cpu().numpy())
-                use_action = action.cpu().numpy().reshape(-1)
-                state_next, reward, done, _ = env.step(use_action)
-                lst_action = action
-                state = state_next
-                rewards += reward
-                lengths += 1
-            print("======== Action Mean mean: {}, Action Std mean: {}, Reward: {}, Length: {} ========"\
-                .format(np.mean(np.array(mu_list), axis=0), np.mean(np.array(std_list), axis=0), reward, lengths))
+    # # to check the mean of actions
+    # def eval_one_trajectory(self):
+    #     env = get_env(self.args['task'])
+    #     env = deepcopy(env)
+    #     with torch.no_grad():
+    #         state, done = env.reset(), False
+    #         lst_action = torch.zeros((1,1,self.args['action_shape'])).to(self.device)
+    #         hidden_policy = torch.zeros((1,1,self.args['lstm_hidden_unit'])).to(self.device)
+    #         rewards = 0
+    #         lengths = 0
+    #         mu_list = []
+    #         std_list = []
+    #         while not done:
+    #             state = state[np.newaxis]
+    #             state = torch.from_numpy(state).float().to(self.device)
+    #             hidden = (hidden_policy, lst_action)
+    #             mu, action, std, hidden_policy = self.get_meta_action(state, hidden, deterministic=True, out_mean_std=True)
+    #             mu_list.append(mu.cpu().numpy())
+    #             std_list.append(std.cpu().numpy())
+    #             use_action = action.cpu().numpy().reshape(-1)
+    #             state_next, reward, done, _ = env.step(use_action)
+    #             lst_action = action
+    #             state = state_next
+    #             rewards += reward
+    #             lengths += 1
+    #         print("======== Action Mean mean: {}, Action Std mean: {}, Reward: {}, Length: {} ========"\
+    #             .format(np.mean(np.array(mu_list), axis=0), np.mean(np.array(std_list), axis=0), reward, lengths))

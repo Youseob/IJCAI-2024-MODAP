@@ -488,6 +488,7 @@ class AlgoTrainer(BaseAlgo):
             lengths = 0
             state = state[np.newaxis]  
             state = torch.from_numpy(state).float().to(self.device)
+            belief_10th, belief_50th, belief_100th = belief.clone(), belief.clone(), belief.clone()
             while not done:
                 # hidden = (hidden_policy, lst_action)
                 action = self.get_meta_action(state, belief, deterministic=True)

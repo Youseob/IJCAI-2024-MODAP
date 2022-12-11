@@ -1,5 +1,5 @@
 import torch
-from torch.distributions import Normal
+from torch.distributions import Normal, Dirichlet
 import numpy as np
 from copy import deepcopy
 from loguru import logger
@@ -251,7 +251,7 @@ class AlgoTrainer(BaseAlgo):
     def rollout_model(self,rollout_batch_size, deterministic=False):
         
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
-        obs = batch['observations']
+        obs = torch.from_numpy(batch['observations']).to(self.device)
         num_dynamics = len(self.transition.output_layer.select)
         # lst_action = batch['last_actions']
 
@@ -259,7 +259,14 @@ class AlgoTrainer(BaseAlgo):
         # hidden_policy_init = batch['policy_hidden']
         
         # Unif
-        belief = torch.ones(rollout_batch_size, num_dynamics).to(self.device) / num_dynamics
+        if self.args["init_belief"] == "uniform":
+            belief = torch.ones(rollout_batch_size, num_dynamics).to(self.device) / num_dynamics
+        
+        elif self.args["init_belief"] == "dirichlet":
+            dist = Dirichlet(torch.ones(num_dynamics)*3)
+            belief = dist.sample((rollout_batch_size,)).to(self.device)
+        else:
+            belief = torch.from_numpy(batch["policy_hidden"]).to(self.device)
         
         obs_max = torch.tensor(self.obs_max).to(self.device)
         obs_min = torch.tensor(self.obs_min).to(self.device)
@@ -273,7 +280,7 @@ class AlgoTrainer(BaseAlgo):
         samples = None
         with torch.no_grad():
             model_indexes = None
-            obs = torch.from_numpy(obs).to(self.device)
+            # obs = torch.from_numpy(obs).to(self.device)
             # lst_action = torch.from_numpy(lst_action).to(self.device)
             # hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)
             # hidden = (hidden_policy, lst_action)
@@ -306,10 +313,13 @@ class AlgoTrainer(BaseAlgo):
                 term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
                 next_obs = torch.clamp(next_obs, obs_min, obs_max)
                 reward = torch.clamp(reward, rew_min, rew_max)
-                log_probs = torch.clamp(log_probs, -20, 5.)
-                # log_prob = torch.clamp(log_prob, -20., 20.)
+                log_prob = torch.clamp(log_prob, -20, 5.)
                 next_belief = belief * torch.exp(log_prob).T # 50000, num_dynamics
                 next_belief /= next_belief.sum(-1, keepdim=True)
+                
+                if self.args["clip_belief"]:
+                    next_belief = torch.clamp(next_belief, None, 0.9)
+                    next_belief /= next_belief.sum(-1, keepdim=True)
                 print('average reward:', reward.mean().item())
                 print('average uncertainty:', uncertainty.mean().item())
 
@@ -321,7 +331,7 @@ class AlgoTrainer(BaseAlgo):
                            'rewards': penalized_reward.cpu().numpy(), 'terminals': term,
                         #    'last_actions': lst_action.cpu().numpy(),
                            'valid': current_nonterm.reshape(-1, 1),
-                           'value_hidden': belief.cpu().numpy(), 'policy_hidden': next_belief.cpu().numpy()} 
+                           'value_hidden': next_belief.cpu().numpy(), 'policy_hidden': belief.cpu().numpy()} 
                 samples = {k: np.expand_dims(v, 1) for k, v in samples.items()}
                 num_samples = samples['observations'].shape[0]
                 index = np.arange(
@@ -448,14 +458,23 @@ class AlgoTrainer(BaseAlgo):
         results = ([self.test_one_trail(env) for _ in range(number_runs)])
         rewards = [result[0] for result in results]
         episode_lengths = [result[1] for result in results]
+        belief_10th = [result[2] for result in results]
+        belief_49th = [result[3] for result in results]
+        belief_99th = [result[4] for result in results]
+        belief_last = [result[5] for result in results]
 
         rew_mean = np.mean(rewards)
         len_mean = np.mean(episode_lengths)
+        
 
         res = OrderedDict()
         res["Reward_Mean_Env"] = rew_mean
         res["Score"] = env.get_normalized_score(rew_mean)
         res["Length_Mean_Env"] = len_mean
+        res["10th_Belief_Max"] = np.mean(belief_10th)
+        res["49th_Belief_Max"] = np.mean(belief_49th)
+        res["99th_Belief_Max"] = np.mean(belief_99th)
+        res["Last_Belief_Max"] = np.mean(belief_last)
 
         return res
 
@@ -481,7 +500,15 @@ class AlgoTrainer(BaseAlgo):
                 # lst_action = action
                 state = next_state
                 lengths += 1
-        return (rewards, lengths)
+                if lengths == 9:
+                    belief_10th = belief.max().item()
+                elif lengths == 49:
+                    belief_50th = belief.max().item()
+                elif lengths == 99:
+                    belief_100th = belief.max().item()
+                elif done:
+                    belief_last = belief.max().item()
+        return (rewards, lengths, belief_10th, belief_50th, belief_100th, belief_last)
     
     @torch.no_grad()
     def belief_update(self, state, action ,next_state, reward, belief):

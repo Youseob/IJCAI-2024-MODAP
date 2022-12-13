@@ -1,5 +1,5 @@
 import torch
-from torch.distributions import Normal, Dirichlet
+from torch.distributions import Normal, Dirichlet, Categorical
 import numpy as np
 from copy import deepcopy
 from loguru import logger
@@ -21,7 +21,6 @@ from offlinerl.utils.net.maple_actor import Maple_actor
 from offlinerl.utils.net.model.maple_critic import Maple_critic
 from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
 
-from offlinerl.utils import loader
 import uuid
 import wandb
 def algo_init(args):
@@ -122,7 +121,9 @@ class AlgoTrainer(BaseAlgo):
 
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
                                  maxlen=self.args['horizon'], policy_hook=None,\
-                                 value_hook=None, model_hook=self.transition, device=self.device)
+                                 value_hook=None, model_hook=self.transition,\
+                                 soft_belief_update=self.args["soft_belief_update"],\
+                                 temp=self.args["soft_belief_temp"], device=self.device)
         torch.cuda.empty_cache()
         self.obs_max = train_buffer['obs'].max(axis=0)
         self.obs_min = train_buffer['obs'].min(axis=0)
@@ -259,14 +260,14 @@ class AlgoTrainer(BaseAlgo):
         # hidden_policy_init = batch['policy_hidden']
         
         # Unif
-        if self.args["init_belief"] == "uniform":
-            belief = torch.ones(rollout_batch_size, num_dynamics).to(self.device) / num_dynamics
+        # if self.args["init_belief"] == "uniform":
+        #     belief = torch.ones(rollout_batch_size, num_dynamics).to(self.device) / num_dynamics
         
-        elif self.args["init_belief"] == "dirichlet":
-            dist = Dirichlet(torch.ones(num_dynamics)*3)
-            belief = dist.sample((rollout_batch_size,)).to(self.device)
-        else:
-            belief = torch.from_numpy(batch["policy_hidden"]).to(self.device)
+        # elif self.args["init_belief"] == "dirichlet":
+        #     dist = Dirichlet(torch.ones(num_dynamics)*3)
+        #     belief = dist.sample((rollout_batch_size,)).to(self.device)
+        # else:
+        belief = torch.from_numpy(batch["policy_hidden"]).to(self.device)
         
         obs_max = torch.tensor(self.obs_max).to(self.device)
         obs_min = torch.tensor(self.obs_min).to(self.device)
@@ -305,7 +306,9 @@ class AlgoTrainer(BaseAlgo):
                 uncertainty_list.append(uncertainty.mean().item())
                 uncertainty_max.append(uncertainty.max().item())
                 if model_indexes is None:
-                    model_indexes = np.random.randint(0, next_obses.shape[0], size=(obs.shape[0]))
+                    # model_indexes = np.random.randint(0, next_obses.shape[0], size=(obs.shape[0]))
+                    # belief (rollout_batch_size, num_dynamics)
+                    model_indexes = Categorical(belief).sample().cpu().numpy()
                 next_obs = next_obses[model_indexes, np.arange(obs.shape[0])] # 50000, obs_dim
                 reward = rewards[model_indexes, np.arange(obs.shape[0])]
                 log_prob = torch.stack([log_probs[index][model_indexes, np.arange(obs.shape[0])] for index in range(num_dynamics)]) # num_dynamics, 500000
@@ -314,12 +317,8 @@ class AlgoTrainer(BaseAlgo):
                 next_obs = torch.clamp(next_obs, obs_min, obs_max)
                 reward = torch.clamp(reward, rew_min, rew_max)
                 log_prob = torch.clamp(log_prob, -20, 5.)
-                next_belief = belief * torch.exp(log_prob).T # 50000, num_dynamics
-                next_belief /= next_belief.sum(-1, keepdim=True)
+                next_belief = self.belief_update(belief, log_prob=log_prob)
                 
-                if self.args["clip_belief"]:
-                    next_belief = torch.clamp(next_belief, None, 0.9)
-                    next_belief /= next_belief.sum(-1, keepdim=True)
                 print('average reward:', reward.mean().item())
                 print('average uncertainty:', uncertainty.mean().item())
 
@@ -469,7 +468,7 @@ class AlgoTrainer(BaseAlgo):
 
         res = OrderedDict()
         res["Reward_Mean_Env"] = rew_mean
-        res["Score"] = env.get_normalized_score(rew_mean)
+        res["Eval_normalized_score"] = env.get_normalized_score(rew_mean)
         res["Length_Mean_Env"] = len_mean
         res["10th_Belief_Max"] = np.mean(belief_10th)
         res["49th_Belief_Max"] = np.mean(belief_49th)
@@ -497,7 +496,7 @@ class AlgoTrainer(BaseAlgo):
                 rewards += reward
                 next_state = torch.from_numpy(next_state[None, ...]).float().to(self.device)
                 reward = torch.from_numpy(reward[None, None, ...]).float().to(self.device)
-                belief = self.belief_update(state, action, next_state, reward, belief)
+                belief = self.belief_update(belief, state, action, next_state, reward)
                 # lst_action = action
                 state = next_state
                 lengths += 1
@@ -512,13 +511,19 @@ class AlgoTrainer(BaseAlgo):
         return (rewards, lengths, belief_10th, belief_50th, belief_100th, belief_last)
     
     @torch.no_grad()
-    def belief_update(self, state, action ,next_state, reward, belief):
-        obs_action = torch.cat([state, action], dim=-1) # bs, dim
-        next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
-        next_obses = torch.cat([next_state, reward], dim=-1) # bs, dim
-        log_probs = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
-        log_probs = torch.clamp(log_probs, -20, 5.)
-        next_belief = belief * torch.exp(log_probs).T # bs, num_dynamics        
+    def belief_update(self, belief, state=None, action=None ,next_state=None, reward=None, log_prob=None):
+        if log_prob is None:
+            obs_action = torch.cat([state, action], dim=-1) # bs, dim
+            next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
+            next_obses = torch.cat([next_state, reward], dim=-1) # bs, dim
+            log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
+            log_prob = torch.clamp(log_prob, -20., 5.)
+            
+        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
+        if self.args["soft_belief_update"]:
+            temp = self.args["soft_belief_temp"]
+            return torch.softmax(next_belief / temp, dim=1)
+        
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief
 

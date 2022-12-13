@@ -519,7 +519,7 @@ class AlgoTrainer(BaseAlgo):
 
         res = OrderedDict()
         res["Reward_Mean_Env"] = rew_mean
-        res["Score"] = env.get_normalized_score(rew_mean)
+        res["Eval_normalized_score"] = env.get_normalized_score(rew_mean)
         res["Length_Mean_Env"] = len_mean
 
         return res

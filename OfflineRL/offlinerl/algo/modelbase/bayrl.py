@@ -46,7 +46,7 @@ def algo_init(args):
     transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
 
 
-    # lstm_hidden_unit: dim(belief_vector)
+    # lstm_hidden_unit: dim(belief_vector)0
     ###################################################
     actor = Maple_actor(args['obs_shape'], args['action_shape'], lstm_hidden_unit=args["transition_select_num"]).to(args['device'])
     q1 = Maple_critic(args['obs_shape'], args['action_shape'], lstm_hidden_unit=args["transition_select_num"]).to(args['device'])
@@ -254,19 +254,7 @@ class AlgoTrainer(BaseAlgo):
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
         obs = torch.from_numpy(batch['observations']).to(self.device)
         num_dynamics = len(self.transition.output_layer.select)
-        # lst_action = batch['last_actions']
 
-        # hidden_value_init = batch['value_hidden']
-        # hidden_policy_init = batch['policy_hidden']
-        
-        # Unif
-        # if self.args["init_belief"] == "uniform":
-        #     belief = torch.ones(rollout_batch_size, num_dynamics).to(self.device) / num_dynamics
-        
-        # elif self.args["init_belief"] == "dirichlet":
-        #     dist = Dirichlet(torch.ones(num_dynamics)*3)
-        #     belief = dist.sample((rollout_batch_size,)).to(self.device)
-        # else:
         belief = torch.from_numpy(batch["policy_hidden"]).to(self.device)
         
         obs_max = torch.tensor(self.obs_max).to(self.device)
@@ -281,10 +269,6 @@ class AlgoTrainer(BaseAlgo):
         samples = None
         with torch.no_grad():
             model_indexes = None
-            # obs = torch.from_numpy(obs).to(self.device)
-            # lst_action = torch.from_numpy(lst_action).to(self.device)
-            # hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)
-            # hidden = (hidden_policy, lst_action)
             for i in range(self.args['horizon']):
                 act = self.get_meta_action(obs, belief, deterministic)
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
@@ -519,38 +503,17 @@ class AlgoTrainer(BaseAlgo):
             log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
             log_prob = torch.clamp(log_prob, -20., 5.)
             
-        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
+        # next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
+        # if self.args["soft_belief_update"]:
+        #     temp = self.args["soft_belief_temp"]
+        #     return torch.softmax(next_belief / temp, dim=1)
+
         if self.args["soft_belief_update"]:
             temp = self.args["soft_belief_temp"]
-            return torch.softmax(next_belief / temp, dim=1)
+            next_belief = belief * torch.exp(log_prob/temp).T # bs, num_dynamics
+            next_belief /= next_belief.sum(-1, keepdim=True)
+            return next_belief
         
+        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief
-
-    # # to check the mean of actions
-    # def eval_one_trajectory(self):
-    #     env = get_env(self.args['task'])
-    #     env = deepcopy(env)
-    #     with torch.no_grad():
-    #         state, done = env.reset(), False
-    #         lst_action = torch.zeros((1,1,self.args['action_shape'])).to(self.device)
-    #         hidden_policy = torch.zeros((1,1,self.args['lstm_hidden_unit'])).to(self.device)
-    #         rewards = 0
-    #         lengths = 0
-    #         mu_list = []
-    #         std_list = []
-    #         while not done:
-    #             state = state[np.newaxis]
-    #             state = torch.from_numpy(state).float().to(self.device)
-    #             hidden = (hidden_policy, lst_action)
-    #             mu, action, std, hidden_policy = self.get_meta_action(state, hidden, deterministic=True, out_mean_std=True)
-    #             mu_list.append(mu.cpu().numpy())
-    #             std_list.append(std.cpu().numpy())
-    #             use_action = action.cpu().numpy().reshape(-1)
-    #             state_next, reward, done, _ = env.step(use_action)
-    #             lst_action = action
-    #             state = state_next
-    #             rewards += reward
-    #             lengths += 1
-    #         print("======== Action Mean mean: {}, Action Std mean: {}, Reward: {}, Length: {} ========"\
-    #             .format(np.mean(np.array(mu_list), axis=0), np.mean(np.array(std_list), axis=0), reward, lengths))

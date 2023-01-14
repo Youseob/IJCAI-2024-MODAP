@@ -40,8 +40,8 @@ hidden_layer_size = 256
 hidden_layers = 2
 transition_layers = 4
 
-transition_init_num = 20
-transition_select_num = 14
+transition_init_num = 23
+transition_select_num = 20
 
 real_data_ratio = 0.05
 

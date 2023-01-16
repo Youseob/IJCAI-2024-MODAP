@@ -123,7 +123,7 @@ class AlgoTrainer(BaseAlgo):
                                  maxlen=self.args['horizon'], policy_hook=None,\
                                  value_hook=None, model_hook=self.transition,\
                                  soft_belief_update=self.args["soft_belief_update"],\
-                                 temp=self.args["soft_belief_temp"], device=self.device)
+                                 temp=self.args["soft_belief_temp"], device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
         torch.cuda.empty_cache()
         self.obs_max = train_buffer['obs'].max(axis=0)
         self.obs_min = train_buffer['obs'].min(axis=0)
@@ -515,17 +515,16 @@ class AlgoTrainer(BaseAlgo):
             log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
             log_prob = torch.clamp(log_prob, -20., 5.)
             
-        # next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
-        # if self.args["soft_belief_update"]:
-        #     temp = self.args["soft_belief_temp"]
-        #     return torch.softmax(next_belief / temp, dim=1)
-
+        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
         if self.args["soft_belief_update"]:
             temp = self.args["soft_belief_temp"]
-            next_belief = belief * torch.exp(log_prob/temp).T # bs, num_dynamics
-            next_belief /= next_belief.sum(-1, keepdim=True)
-            return next_belief
+            return torch.softmax(next_belief / temp, dim=1)
+
+        # if self.args["soft_belief_update"]:
+        #     temp = self.args["soft_belief_temp"]
+        #     next_belief = belief * torch.exp(log_prob/temp).T # bs, num_dynamics
+        #     next_belief /= next_belief.sum(-1, keepdim=True)
+        #     return next_belief
         
-        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief

@@ -30,7 +30,7 @@ def allocate_hidden_state(replay_pool_full_traj, get_action, make_hidden):
 def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                      policy_hook=None, value_hook=None, model_hook=None,\
                      soft_belief_update=None, temp=None,\
-                     device=None, fake_env=None):
+                     device=None, fake_env=None, traj_num_to_infer=100):
     import gym
     import d4rl
     if 'sac_data' in name:
@@ -141,7 +141,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
         data['value_hidden'] = None # np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]))
         last_start_ind = 0
         # TODO need to traj_num_to_inter as increase in # of dynamics 
-        traj_num_to_infer = 80
+        # traj_num_to_infer = 80
         for i_ter in range(int(np.ceil(traj_num / traj_num_to_infer))):
             traj_lens_it = traj_lens[traj_num_to_infer * i_ter : min(traj_num_to_infer * (i_ter + 1), traj_num)]
             states = np.zeros((len(traj_lens_it), max_traj_len, data['observations'].shape[-1]), dtype=np.float32)

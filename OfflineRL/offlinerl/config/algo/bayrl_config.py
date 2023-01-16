@@ -19,6 +19,7 @@ value_hidden_sizes=(256,256)
 hidden_sizes=(16,)
 model_pool_size = 250000
 rollout_batch_size = 50000
+traj_num_to_infer = 50
 # init_belief = None
 # clip_belief = False
 soft_belief_update = False

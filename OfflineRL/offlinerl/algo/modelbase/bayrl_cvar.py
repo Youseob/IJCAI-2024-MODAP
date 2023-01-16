@@ -138,7 +138,11 @@ class AlgoTrainer(BaseAlgo):
         self.rew_min = train_buffer['rew'].min()
 
         for i in range(self.args['out_train_epoch']):
-            self.rollout_model(self.args['rollout_batch_size'])
+            
+            self.model_pool._pointer = 0
+            self.model_pool._size = 0
+            for _ in range(3):
+                self.rollout_model(self.args['rollout_batch_size'])
             torch.cuda.empty_cache()
             train_loss = {}
             train_loss['policy_loss'] = 0
@@ -290,20 +294,8 @@ class AlgoTrainer(BaseAlgo):
                 log_prob = torch.clamp(log_prob, -20, 5.)
                 next_belief = self.belief_update(belief, log_prob=log_prob)
 
-                sum_reward[:, n] += reward.cpu().numpy() * current_nonterm.reshape(-1, 1)
+                sum_reward[:, n] += (self.args["discount"]**i) * reward.cpu().numpy() * current_nonterm.reshape(-1, 1)
                 nonterm_mask = ~term.squeeze(-1)
-                #nonterm_mask: 1-not done, 0-done
-                # samples = {'observations': obs.cpu().numpy(), 'actions': act.cpu().numpy(), 'next_observations': next_obs.cpu().numpy(),
-                #             'rewards': penalized_reward.cpu().numpy(), 'terminals': term,
-                #         #    'last_actions': lst_action.cpu().numpy(),
-                #             'valid': current_nonterm.reshape(-1, 1),
-                #             'value_hidden': next_belief.cpu().numpy(), 'policy_hidden': belief.cpu().numpy()} 
-                # samples = {k: np.expand_dims(v, 1) for k, v in samples.items()}
-                # num_samples = samples['observations'].shape[0]
-                # index = np.arange(
-                #     self.model_pool._pointer, self.model_pool._pointer + num_samples) % self.model_pool._max_size
-                # for k in samples:
-                #     self.model_pool.fields[k][index, i] = samples[k][:, 0]
                 _obs[:, n, i] = obs
                 _next_obs[:, n, i] = next_obs
                 _act[:, n, i] = act                
@@ -317,10 +309,18 @@ class AlgoTrainer(BaseAlgo):
                 current_nonterm = current_nonterm & nonterm_mask
                 obs = next_obs
                 belief = next_belief
+        
+            _, sampled_act, log_prob_act, _ = self.actor(belief, obs)
+            value1 = self.target_q1(belief, sampled_act, obs)
+            value2 = self.target_q2(belief, sampled_act, obs)
+            value = torch.min(value1, value2) - torch.exp(self.log_alpha) * log_prob_act.unsqueeze(-1)
+            sum_reward[:, n] += (self.args['discount']**(self.args['horizon'])) * current_nonterm.reshape(-1, 1) * value.cpu().numpy()
+        
         worst_num_traj = int(self.args['N'] * self.args["worst_percentil"])
         worst_x_ind = np.arange(rollout_batch_size).repeat(worst_num_traj)
         worst_y_in = np.argsort(sum_reward, axis=1)[:, :worst_num_traj, :].reshape(-1) # rollout_batch_size, N*portion, 1
         
+        num_samples = worst_num_traj * rollout_batch_size
         index = np.arange(self.model_pool._pointer, self.model_pool._pointer + worst_num_traj * rollout_batch_size) % self.model_pool._max_size
         self.model_pool.fields["observations"][index] = _obs[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
         self.model_pool.fields["actions"][index] = _act[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
@@ -331,9 +331,9 @@ class AlgoTrainer(BaseAlgo):
         self.model_pool.fields["value_hidden"][index] = _value_hidden[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
         self.model_pool.fields["policy_hidden"][index] = _policy_hidden[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
         
-        self.model_pool._pointer += worst_num_traj * rollout_batch_size
+        self.model_pool._pointer += num_samples
         self.model_pool._pointer %= self.model_pool._max_size
-        self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + worst_num_traj*rollout_batch_size)
+        self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
         return 
 
     def train_policy(self, batch):

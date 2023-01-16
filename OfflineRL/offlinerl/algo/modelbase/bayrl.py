@@ -215,38 +215,50 @@ class AlgoTrainer(BaseAlgo):
         valdata = buffer[val_splits.indices]
         batch_size = self.args['transition_batch_size']
 
-        val_losses = [float('inf') for i in range(self.transition.ensemble_size)]
+        if self.args["transition_epoch"]:
+            for epoch in range(self.args["transition_epoch"]):
+                idxs = np.random.randint(train_buffer.shape[0], size=[self.transition.ensemble_size, train_buffer.shape[0]])
+                for batch_num in range(int(np.ceil(idxs.shape[-1] / batch_size))):
+                    batch_idxs = idxs[:, batch_num * batch_size:(batch_num + 1) * batch_size]
+                    batch = train_buffer[batch_idxs]
+                    self._train_transition(self.transition, batch, self.transition_optim)
+                new_val_losses = list(self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy())
+                print(np.mean(new_val_losses))
+                self.log_res(epoch, {"transition_val_loss" : np.mean(new_val_losses)})
 
-        epoch = 0
-        cnt = 0
-        while True:
-            epoch += 1
-            idxs = np.random.randint(train_buffer.shape[0], size=[self.transition.ensemble_size, train_buffer.shape[0]])
-            for batch_num in range(int(np.ceil(idxs.shape[-1] / batch_size))):
-                batch_idxs = idxs[:, batch_num * batch_size:(batch_num + 1) * batch_size]
-                batch = train_buffer[batch_idxs]
-                self._train_transition(self.transition, batch, self.transition_optim)
-            new_val_losses = list(self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy())
-            print(new_val_losses)
+        else:
+            val_losses = [float('inf') for i in range(self.transition.ensemble_size)]
 
-            indexes = []
-            for i, new_loss, old_loss in zip(range(len(val_losses)), new_val_losses, val_losses):
-                if new_loss < old_loss:
-                    indexes.append(i)
-                    val_losses[i] = new_loss
+            epoch = 0
+            cnt = 0
+            while True:
+                epoch += 1
+                idxs = np.random.randint(train_buffer.shape[0], size=[self.transition.ensemble_size, train_buffer.shape[0]])
+                for batch_num in range(int(np.ceil(idxs.shape[-1] / batch_size))):
+                    batch_idxs = idxs[:, batch_num * batch_size:(batch_num + 1) * batch_size]
+                    batch = train_buffer[batch_idxs]
+                    self._train_transition(self.transition, batch, self.transition_optim)
+                new_val_losses = list(self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy())
+                print(new_val_losses)
 
-            if len(indexes) > 0:
-                self.transition.update_save(indexes)
-                cnt = 0
+                indexes = []
+                for i, new_loss, old_loss in zip(range(len(val_losses)), new_val_losses, val_losses):
+                    if new_loss < old_loss:
+                        indexes.append(i)
+                        val_losses[i] = new_loss
 
-            else:
-                cnt += 1
+                if len(indexes) > 0:
+                    self.transition.update_save(indexes)
+                    cnt = 0
 
-            if cnt >= 5:
-                break
+                else:
+                    cnt += 1
 
-        indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])
-        self.transition.set_select(indexes)
+                if cnt >= 5:
+                    break
+
+            indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])
+            self.transition.set_select(indexes)
         return self.transition
 
     def rollout_model(self,rollout_batch_size, deterministic=False):

@@ -29,7 +29,7 @@ in_train_epoch = 1000
 
 train_batch_size = 256              # train policy num of trajectories
 
-number_runs_eval = 40            # evaluation epochs in mujoco 
+number_runs_eval = 10            # evaluation epochs in mujoco 
 
 #-------------
 dynamics_path = None

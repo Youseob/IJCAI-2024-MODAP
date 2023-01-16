@@ -138,7 +138,8 @@ class AlgoTrainer(BaseAlgo):
         self.rew_min = train_buffer['rew'].min() - self.args['penalty_clip'] * self.args['lam']
 
         for i in range(self.args['out_train_epoch']):
-            uncertainty_mean, uncertainty_max = self.rollout_model(self.args['rollout_batch_size'])
+            for _ in range(50000 // self.args["rollout_batch_size"]):
+                uncertainty_mean, uncertainty_max = self.rollout_model(self.args['rollout_batch_size'])
             
             torch.cuda.empty_cache()
 

@@ -26,3 +26,5 @@ mkdir -p /root/.mujoco \
     && rm mujoco.tar.gz
 
 pip install mujoco_py 
+echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:~/.mujoco/mujoco210/bin" >> ~/.bashrc
+source ~/.bashrc

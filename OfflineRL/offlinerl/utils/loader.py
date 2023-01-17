@@ -175,14 +175,11 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
             log_probs = torch.clamp(log_probs, -20, 5.)
             for seq_idx in range(max_traj_len):
                 # likelihood
-                # next_belief = belief * torch.exp(log_probs[:, :, seq_idx]).T # (num_dynaics, len(traj_lens_it) ).T
+                next_belief = belief * torch.exp(log_probs[:, :, seq_idx]).T # (num_dynaics, len(traj_lens_it) ).T
                 # soft belief-update
                 if soft_belief_update:
-                    next_belief = belief * torch.exp(log_probs[:, :, seq_idx]/temp).T # (num_dynaics, len(traj_lens_it) ).T
-                    next_belief /= next_belief.sum(-1, keepdim=True)
-                    # next_belief = torch.softmax(next_belief / temp, dim=1)
+                    next_belief = torch.softmax(next_belief / temp, dim=1)
                 else:
-                    next_belief = belief * torch.exp(log_probs[:, :, seq_idx]).T # (num_dynaics, len(traj_lens_it) ).T
                     next_belief /= next_belief.sum(-1, keepdim=True)
                 if torch.isnan(next_belief).any():
                     import ipdb; ipdb.set_trace()

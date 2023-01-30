@@ -4,10 +4,10 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-from offlinerl.config.algo import cql_config, plas_config, mopo_config, moose_config, bcqd_config, bcq_config, bc_config, crr_config, combo_config, bremen_config, maple_config, bayrl_config, bayrl_cvar_config
+from offlinerl.config.algo import cql_config, plas_config, mopo_config, moose_config, bcqd_config, bcq_config, bc_config, crr_config, combo_config, bremen_config, maple_config, bayrl_config, bayrl_cvar_config, model_analysis_config
 from offlinerl.utils.config import parse_config
 from offlinerl.algo.modelfree import cql, plas, bcqd, bcq, bc, crr
-from offlinerl.algo.modelbase import mopo, moose, combo, bremen, maple, bayrl, bayrl_cvar
+from offlinerl.algo.modelbase import mopo, moose, combo, bremen, maple, bayrl, bayrl_cvar, model_analysis
 
 algo_dict = {
     'bc' : {"algo" : bc, "config" : bc_config},
@@ -22,8 +22,8 @@ algo_dict = {
     'bremen' : {"algo" : bremen, "config" : bremen_config},
     'maple': {'algo':maple , 'config':maple_config},
     'bayrl': {'algo':bayrl , 'config':bayrl_config},
-    'bayrl_cvar': {'algo':bayrl_cvar , 'config':bayrl_cvar_config}
-
+    'bayrl_cvar': {'algo':bayrl_cvar , 'config':bayrl_cvar_config},
+    'model_analysis': {'algo': model_analysis, 'config': model_analysis_config}
 }
 
 def algo_select(command_args, algo_config_module=None):

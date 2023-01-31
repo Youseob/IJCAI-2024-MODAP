@@ -244,7 +244,7 @@ class AlgoTrainer(BaseAlgo):
             if epoch % 200 == 0:
                 eval_res = self.eval_policy()
                 res.update(eval_res)
-                self.log_res(epoch // 200, res)
+                # self.log_res(epoch // 200, res)
                 
     def _sac_update(self, batch_data):
         obs = batch_data['obs']
@@ -332,14 +332,14 @@ class AlgoTrainer(BaseAlgo):
                 model_adv =  gt_ns_qvalue - pred_ns_qvalue
                 per_diff = data["rew"].reshape(-1, 1) - reward + self.args['discount'] * model_adv
                 abs_model_adv = torch.abs(model_adv)
-                adb_per_diff = torch.abs(per_diff)
+                abs_per_diff = torch.abs(per_diff)
             return { 
                     "abs_model_adv_min" : abs_model_adv.min().item(), 
                     "abs_model_adv_max" : abs_model_adv.max().item(),
                     "abs_model_adv_mean" : abs_model_adv.mean().item(),
-                    "per_diff_min" : per_diff.min().item(),
-                    "per_diff_max" : per_diff.max().item(),
-                    "per_diff_mean" : per_diff.mean().item(),
+                    "abs_per_diff_min" : abs_per_diff.min().item(),
+                    "abs_per_diff_max" : abs_per_diff.max().item(),
+                    "abs_per_diff_mean" : abs_per_diff.mean().item(),
                     "loss" : loss.item()
                 }
         else:

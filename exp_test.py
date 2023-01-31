@@ -1,6 +1,6 @@
 import wandb
-# import gym
-# import d4rl
+import gym
+import d4rl
 
 for env in ['halfcheetah']:
     for dset in ['medium', 'medium-expert']:

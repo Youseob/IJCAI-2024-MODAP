@@ -43,7 +43,7 @@ transition_layers = 4
 
 transition_init_num = 23
 transition_select_num = 20
-transition_epoch = 1000
+transition_epoch = None
 
 real_data_ratio = 0.05
 transition_batch_size = 256

@@ -26,8 +26,6 @@ setup(
         "sklearn",
         "gtimer",
         "numpy",
-#         "ray==1.2",
-        "wandb",
         "protobuf==3.20.0",
         "aioredis==1.3.1",
         "aiohttp==3.7.4",

@@ -5,6 +5,7 @@ task = "Hopper-v3"
 task_data_type = "low"
 task_train_num = 99
 
+# wandb_mode = "enabled"
 seed = 42
 
 device = 'cuda'+":"+str(select_free_cuda()) if torch.cuda.is_available() else 'cpu'
@@ -20,8 +21,7 @@ hidden_sizes=(16,)
 model_pool_size = 250000
 rollout_batch_size = 50000
 traj_num_to_infer = 50
-# init_belief = None
-# clip_belief = False
+
 soft_belief_update = False
 soft_belief_temp = None
 handle_per_round = 400

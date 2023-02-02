@@ -23,7 +23,7 @@ setup(
         "fire",
         "loguru",
         "gym",
-        "sklearn",
+        # "sklearn",
         "gtimer",
         "numpy",
         "protobuf==3.20.0",

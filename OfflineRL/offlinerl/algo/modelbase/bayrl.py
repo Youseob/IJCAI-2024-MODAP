@@ -324,9 +324,9 @@ class AlgoTrainer(BaseAlgo):
                 #nonterm_mask: 1-not done, 0-done
                 samples = {'observations': obs.cpu().numpy(), 'actions': act.cpu().numpy(), 'next_observations': next_obs.cpu().numpy(),
                            'rewards': penalized_reward.cpu().numpy(), 'terminals': term,
-                        #    'last_actions': lst_action.cpu().numpy(),
                            'valid': current_nonterm.reshape(-1, 1),
                            'value_hidden': next_belief.cpu().numpy(), 'policy_hidden': belief.cpu().numpy()} 
+                
                 samples = {k: np.expand_dims(v, 1) for k, v in samples.items()}
                 num_samples = samples['observations'].shape[0]
                 index = np.arange(
@@ -350,12 +350,6 @@ class AlgoTrainer(BaseAlgo):
             batch[k] = torch.from_numpy(batch[k][:,:max_len]).to(self.device)
         belief = batch['policy_hidden']
         next_belief = batch['value_hidden']
-        # value_state = self.value_gru(batch['observations'], batch['last_actions'],value_hidden,lens)
-        # policy_state = self.policy_gru(batch['observations'], batch['last_actions'], policy_hidden, lens)
-        # lens_next = torch.ones(len(lens)).int()
-
-        # value_state_next = torch.cat([value_state[:,1:],value_state_next],dim=1)
-        # policy_state_next = torch.cat([policy_state[:,1:],policy_state_next],dim=1)
 
         q1 = self.q1(belief,batch['actions'],batch['observations'])
         q2 = self.q2(belief,batch['actions'],batch['observations'])
@@ -395,6 +389,7 @@ class AlgoTrainer(BaseAlgo):
             self.log_alpha_optim.zero_grad()
             alpha_loss.backward()
             self.log_alpha_optim.step()
+        
         q1_ = self.q1(belief, act_now, batch['observations'])
         q2_ = self.q2(belief, act_now, batch['observations'])
         min_q_ = torch.min(q1_, q2_)
@@ -460,8 +455,6 @@ class AlgoTrainer(BaseAlgo):
 
         rew_mean = np.mean(rewards)
         len_mean = np.mean(episode_lengths)
-        
-
         res = OrderedDict()
         res["Reward_Mean_Env"] = rew_mean
         res["Eval_normalized_score"] = env.get_normalized_score(rew_mean)

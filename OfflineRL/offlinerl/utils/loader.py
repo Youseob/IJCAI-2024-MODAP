@@ -188,7 +188,6 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 belief = next_belief
 
             ### TODO ONE STEP trajectory update
-
             start_ind = last_start_ind
             for ind, item in enumerate(traj_lens_it):
                 if data['policy_hidden'] is None:

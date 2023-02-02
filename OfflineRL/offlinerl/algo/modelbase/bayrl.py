@@ -232,7 +232,8 @@ class AlgoTrainer(BaseAlgo):
             val_losses = np.array([float('inf') for i in range(self.transition.ensemble_size)])
 
             epoch = 0
-            cnt = 0
+            cnt = np.zeros(self.transition.ensemble_size, dtype=int)
+            done = np.zeros(self.transition.ensemble_size, dtype=bool)
             while True:
                 epoch += 1
                 idxs = np.random.randint(train_buffer.shape[0], size=[self.transition.ensemble_size, train_buffer.shape[0]])
@@ -240,25 +241,34 @@ class AlgoTrainer(BaseAlgo):
                     batch_idxs = idxs[:, batch_num * batch_size:(batch_num + 1) * batch_size]
                     batch = train_buffer[batch_idxs]
                     self._train_transition(self.transition, batch, self.transition_optim)
-                new_val_losses = list(self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy())
+                
+                new_val_losses = self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy()
                 ###
-                new_val_losses = np.floor(np.array(new_val_losses) * 1000) / 1000
+                new_val_losses = np.floor(new_val_losses * 1000) / 1000
 
                 mask = new_val_losses < val_losses
+                cnt *= (1 - mask)
+                cnt += (1 - mask)
+
+                # new finished model
+                done *= np.logical_or((cnt > 2), done)
+                if epoch % 50 == 0:
+                    print("="*50)
+                    print(f"Epoch {epoch}: Done model index")
+                    print(np.where(done)[0].tolist())
+
+                mask *= ~done
                 if mask.any():
-                    new_val_losses < val_losses
                     indexes = np.where(mask)[0].tolist()
-                    cnt = 0
-                    print(new_val_losses[mask])
+                    print(f"Epoch {epoch}: Training model index")
+                    print(indexes)
                     val_losses[mask] = new_val_losses[mask]
                     self.transition.update_save(indexes)
 
-                else:
-                    cnt += 1
-
-                if cnt >= 3:
-                # if cnt >=5:    
+                if done.all():
+                    print(f"Epoch {epoch}: Done training transition")
                     break
+
 
             indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])
             self.transition.set_select(indexes)

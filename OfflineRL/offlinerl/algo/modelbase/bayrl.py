@@ -23,6 +23,7 @@ from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
 
 import uuid
 import wandb
+
 def algo_init(args):
     logger.info('Run algo_init function')
 
@@ -228,7 +229,7 @@ class AlgoTrainer(BaseAlgo):
                 self.log_res(epoch, {"transition_val_loss" : np.mean(new_val_losses)})
 
         else:
-            val_losses = [float('inf') for i in range(self.transition.ensemble_size)]
+            val_losses = np.array([float('inf') for i in range(self.transition.ensemble_size)])
 
             epoch = 0
             cnt = 0
@@ -240,22 +241,23 @@ class AlgoTrainer(BaseAlgo):
                     batch = train_buffer[batch_idxs]
                     self._train_transition(self.transition, batch, self.transition_optim)
                 new_val_losses = list(self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy())
-                print(new_val_losses)
+                ###
+                new_val_losses = np.floor(np.array(new_val_losses) * 1000) / 1000
 
-                indexes = []
-                for i, new_loss, old_loss in zip(range(len(val_losses)), new_val_losses, val_losses):
-                    if new_loss < old_loss:
-                        indexes.append(i)
-                        val_losses[i] = new_loss
-
-                if len(indexes) > 0:
-                    self.transition.update_save(indexes)
+                mask = new_val_losses < val_losses
+                if mask.any():
+                    new_val_losses < val_losses
+                    indexes = np.where(mask)[0].tolist()
                     cnt = 0
+                    print(new_val_losses[mask])
+                    val_losses[mask] = new_val_losses[mask]
+                    self.transition.update_save(indexes)
 
                 else:
                     cnt += 1
 
-                if cnt >= 5:
+                if cnt >= 3:
+                # if cnt >=5:    
                     break
 
             indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])

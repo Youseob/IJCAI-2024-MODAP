@@ -246,23 +246,28 @@ class AlgoTrainer(BaseAlgo):
                 ###
                 new_val_losses = np.floor(new_val_losses * 1000) / 1000
 
-                mask = new_val_losses < val_losses
-                cnt *= (1 - mask)
-                cnt += (1 - mask)
+                reset_mask = new_val_losses < val_losses
+                cnt *= (1 - reset_mask)
+                cnt += (1 - reset_mask)
 
                 # new finished model
-                done *= np.logical_or((cnt > 2), done)
-                if epoch % 50 == 0:
-                    print("="*50)
-                    print(f"Epoch {epoch}: Done model index")
+                old_done = done
+                done = np.logical_or((cnt > 2), done)
+                if ((~old_done) * done).any():
+                    indexes = np.where(((~old_done) * done))[0].tolist()
+                    print(f"Epoch {epoch}: new finished model")
+                    print(indexes)
+                    print(val_losses[indexes])
+                    print("Done model index")
                     print(np.where(done)[0].tolist())
 
-                mask *= ~done
-                if mask.any():
-                    indexes = np.where(mask)[0].tolist()
-                    print(f"Epoch {epoch}: Training model index")
+                # reset 
+                reset_mask *= ~done 
+                if reset_mask.any():
+                    indexes = np.where(reset_mask)[0].tolist()
+                    print(f"Epoch {epoch}: Reset model index")
                     print(indexes)
-                    val_losses[mask] = new_val_losses[mask]
+                    val_losses[reset_mask] = new_val_losses[reset_mask]
                     self.transition.update_save(indexes)
 
                 if done.all():

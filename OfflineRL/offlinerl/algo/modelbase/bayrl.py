@@ -103,12 +103,13 @@ class AlgoTrainer(BaseAlgo):
         self.args['model_pool_size'] = int(args['model_pool_size'])
 
     def train(self, train_buffer, val_buffer, callback_fn):
-        self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
         if self.args['dynamics_path'] is not None:
             self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
         else:
+            self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
             self.train_transition(train_buffer)
-            if self.args['dynamics_save_path'] is not None: torch.save(self.transition, self.args['dynamics_save_path'])
+            if self.args['dynamics_save_path'] is not None: 
+                torch.save({'model': self.transition, 'optim': self.transition_optim}, self.args['dynamics_save_path'])
         if self.args['only_dynamics']:
             return
         self.transition.requires_grad_(False)
@@ -252,7 +253,7 @@ class AlgoTrainer(BaseAlgo):
 
                 # new finished model
                 old_done = done
-                done = np.logical_or((cnt > 2), done)
+                done = np.logical_or((cnt > 4), done)
                 if ((~old_done) * done).any():
                     indexes = np.where(((~old_done) * done))[0].tolist()
                     print(f"Epoch {epoch}: new finished model")
@@ -271,6 +272,7 @@ class AlgoTrainer(BaseAlgo):
                     self.transition.update_save(indexes)
 
                 if done.all():
+                    print(val_losses)
                     print(f"Epoch {epoch}: Done training transition")
                     break
 
@@ -332,8 +334,8 @@ class AlgoTrainer(BaseAlgo):
                 log_prob = torch.clamp(log_prob, -20, 5.)
                 next_belief = self.belief_update(belief, log_prob=log_prob)
                 
-                print('average reward:', reward.mean().item())
-                print('average uncertainty:', uncertainty.mean().item())
+                # print('average reward:', reward.mean().item())
+                # print('average uncertainty:', uncertainty.mean().item())
 
                 penalized_reward = reward - self.args['lam'] * uncertainty
 
@@ -353,7 +355,6 @@ class AlgoTrainer(BaseAlgo):
                 current_nonterm = current_nonterm & nonterm_mask
                 obs = next_obs
                 belief = next_belief
-
             self.model_pool._pointer += num_samples
             self.model_pool._pointer %= self.model_pool._max_size
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)

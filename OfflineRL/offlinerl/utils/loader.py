@@ -136,19 +136,21 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
     elif adapt and model_hook is not None:
         num_dynamics = belief_dim = replay_pool.hidden_length
         # making init belif state
-        # 1, making state and lst action
         data['policy_hidden'] = None # np.zeros((data['last_actions'].shape[0], policy_hidden.shape[-1]))
         data['value_hidden'] = None # np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]))
         last_start_ind = 0
-        # TODO need to traj_num_to_inter as increase in # of dynamics 
-        # traj_num_to_infer = 80
+        # TODO need to adjust traj_num_to_inter as increase in # of dynamics 
+        traj_num_to_infer = max_traj_len
         for i_ter in range(int(np.ceil(traj_num / traj_num_to_infer))):
             traj_lens_it = traj_lens[traj_num_to_infer * i_ter : min(traj_num_to_infer * (i_ter + 1), traj_num)]
+            # (num_to_infer, max_traj_len; H, dim)
             states = np.zeros((len(traj_lens_it), max_traj_len, data['observations'].shape[-1]), dtype=np.float32)
             actions = np.zeros((len(traj_lens_it), max_traj_len, data['actions'].shape[-1]), dtype=np.float32)
             rewards = np.zeros((len(traj_lens_it), max_traj_len, data['rewards'].shape[-1]), dtype=np.float32)
             next_states = np.zeros((len(traj_lens_it), max_traj_len, data['next_observations'].shape[-1]), dtype=np.float32)
             start_ind = last_start_ind
+            
+            # For each trajectory 
             for ind, item in enumerate(traj_lens_it):
                 states[ind, :item] = data['observations'][start_ind:(start_ind+item)]
                 actions[ind, :item] = data['actions'][start_ind:(start_ind+item)]
@@ -177,12 +179,10 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 # likelihood
                 next_belief = belief * torch.exp(log_probs[:, :, seq_idx]).T # (num_dynaics, len(traj_lens_it) ).T
                 # soft belief-update
-                if soft_belief_update:
-                    next_belief = torch.softmax(next_belief / temp, dim=1)
-                else:
-                    next_belief /= next_belief.sum(-1, keepdim=True)
-                if torch.isnan(next_belief).any():
-                    import ipdb; ipdb.set_trace()
+                if soft_belief_update: next_belief = torch.softmax(next_belief / temp, dim=1)
+                else: next_belief /= next_belief.sum(-1, keepdim=True)
+                
+                if torch.isnan(next_belief).any():  import pdb; pdb.set_trace()
                 policy_hidden[:, seq_idx, :] = belief.cpu().detach().numpy()
                 value_hidden[:, seq_idx, :] = next_belief.cpu().detach().numpy()
                 belief = next_belief
@@ -209,6 +209,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
     for k in data_target:
         data_target[k][traj_target_ind, :] = 0
     if adapt:
+        # for each trajectory
         for i in range(data['policy_hidden'].shape[0]):
             if mini_target_ind == 0:
                 for k in data:
@@ -218,17 +219,18 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 if k in data_target:
                     data_target[k][traj_target_ind, mini_target_ind, :] = data[k][i]
             mini_target_ind += 1
+            
             if data['end_step'][i] or mini_target_ind == maxlen:
                 traj_target_ind += 1
                 traj_target_ind = traj_target_ind % replay_pool._max_size
                 mini_traj_cum_num += 1
                 mini_target_ind = 0
+        
         replay_pool._pointer += mini_traj_cum_num
         replay_pool._size = int(min(mini_traj_cum_num + replay_pool._size, replay_pool._max_size))
         replay_pool._pointer %= replay_pool._max_size
-        print('[ DEBUG ] data num: {}, max size: {}'.format(mini_traj_cum_num, replay_pool._max_size))
-        return
-    replay_pool.add_samples(data)
+        print('[ DEBUG ] data num: {}, max size: {}'.format(mini_traj_cum_num, replay_pool._max_size)) 
+        return 
 
 def reset_hidden_state(replay_pool, name, maxlen=5, policy_hook=None, value_hook=None, device=None, fake_env=None):
     import gym
@@ -328,9 +330,9 @@ def reset_hidden_state(replay_pool, name, maxlen=5, policy_hook=None, value_hook
     print('[ DEBUG ] reset_hidden_state: inferring hidden state done')
     data_new = {'policy_hidden': data['policy_hidden'],
             'value_hidden': data['value_hidden']}
-    data_adapt = {k: [] for k in data_new}
-    it_traj = {k: [] for k in data_new}
-    current_len = 0
+    # data_adapt = {k: [] for k in data_new}
+    # it_traj = {k: [] for k in data_new}
+    # current_len = 0
     data_target = {k: replay_pool.fields[k] for k in data_new}
     traj_target_ind = 0
     mini_target_ind = 0

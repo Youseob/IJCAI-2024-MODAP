@@ -107,7 +107,7 @@ class AlgoTrainer(BaseAlgo):
             ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
             self.transition = ckpt["model"].to(self.device)
             self.transition_optim = ckpt["optim"]
-            print("[ debug ] load state dict model done")
+            print("[ DEBUG ] load state dict model done")
         else:
             self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
             self.train_transition(train_buffer)

@@ -140,7 +140,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
         data['value_hidden'] = None # np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]))
         last_start_ind = 0
         # TODO need to adjust traj_num_to_inter as increase in # of dynamics 
-        print(f"[ debug ] {traj_num_to_infer} traj_num_to_infer, {num_dynamics} model")
+        print(f"[ DEBUG ] {max_traj_len} max_traj_len, {traj_num_to_infer} traj_num_to_infer, {num_dynamics} model")
         for i_ter in range(int(np.ceil(traj_num / traj_num_to_infer))):
             traj_lens_it = traj_lens[traj_num_to_infer * i_ter : min(traj_num_to_infer * (i_ter + 1), traj_num)]
             # (num_to_infer, max_traj_len; H, dim)
@@ -158,13 +158,12 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 next_states[ind, :item] = data['next_observations'][start_ind:(start_ind+item)]
                 start_ind += item
             with torch.no_grad():
-                # states (400, 999
                 obs_action = torch.cat([torch.from_numpy(states).to(device), torch.from_numpy(actions).to(device)], dim=-1) # bs, seq_len, dim
                 next_obs_dists = get_model(obs_action.reshape(len(traj_lens_it)*max_traj_len, -1)) # bs*seq_len, dim -> (num_dynamics, bs*seq_len, dim)
                 next_obses = torch.cat([torch.from_numpy(next_states).to(device), torch.from_numpy(rewards).to(device)], dim=-1).reshape(len(traj_lens_it)*max_traj_len, -1) # bs*seq_len, dim
                 log_probs = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs*seq_len)
-                # (num_dynamics, bs*seq_len)
-            max_len = max(traj_lens_it)
+                del obs_action, next_obs_dists, next_obses
+                torch.cuda.empty_cache()
             
             ### TODO Full trajectory update
             # policy_hiddn  == belief
@@ -172,8 +171,8 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
             # value_hidden == next_belief
             value_hidden = np.ones( (len(traj_lens_it), max_traj_len, belief_dim), dtype=np.float32 ) / belief_dim
             
-            belief = torch.ones(len(traj_lens_it), belief_dim).to(device) / belief_dim # (bs, num_dynamics)
-            log_probs = log_probs.reshape(num_dynamics, len(traj_lens_it), max_traj_len)
+            belief = torch.ones(len(traj_lens_it), belief_dim) / belief_dim # (bs, num_dynamics)
+            log_probs = log_probs.reshape(num_dynamics, len(traj_lens_it), max_traj_len).cpu()
             log_probs = torch.clamp(log_probs, -20, 5.)
             for seq_idx in range(max_traj_len):
                 # likelihood
@@ -183,11 +182,10 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 else: next_belief /= next_belief.sum(-1, keepdim=True)
                 
                 if torch.isnan(next_belief).any():  import pdb; pdb.set_trace()
-                policy_hidden[:, seq_idx, :] = belief.cpu().detach().numpy()
-                value_hidden[:, seq_idx, :] = next_belief.cpu().detach().numpy()
+                policy_hidden[:, seq_idx, :] = belief.numpy()
+                value_hidden[:, seq_idx, :] = next_belief.numpy()
                 belief = next_belief
 
-            ### TODO ONE STEP trajectory update
             start_ind = last_start_ind
             for ind, item in enumerate(traj_lens_it):
                 if data['policy_hidden'] is None:
@@ -197,7 +195,6 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 data['value_hidden'][start_ind:(start_ind + item)] = value_hidden[ind, :item]
                 start_ind += item
             last_start_ind = start_ind
-            torch.cuda.empty_cache()
 
         print('[ DEBUG ]: inferring hidden state done by using transition model')
         if soft_belief_update:

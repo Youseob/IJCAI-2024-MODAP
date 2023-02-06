@@ -10,5 +10,5 @@ python examples/train_d4rl.py --algo_name=bayrl \
                               --transition_init_num=$init_num \
                               --transition_select_num=$num_model \
                               --dynamics_path=/model/$dataset-$num_model-seed-$seed.th \
-                              --traj_num_to_infer=$num_traj_infer \  
+                              --traj_num_to_infer=$num_traj_infer \
                               --seed=$seed

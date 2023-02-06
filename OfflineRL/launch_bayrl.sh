@@ -8,5 +8,5 @@ python examples/train_d4rl.py --algo_name=bayrl \
                               --task=d4rl-$dataset-v2 \
                               --transition_init_num=$init_num \
                               --transition_select_num=$num_model \
-                              --dynamics_path=/output/$dataset-$num_model-seed-$seed.th \
+                              --dynamics_path=/model/$dataset-$num_model-seed-$seed.th \
                               --seed=$seed

@@ -260,6 +260,11 @@ class AlgoTrainer(BaseAlgo):
 
                 else:
                     cnt += 1
+                
+                if epoch % 1000 == 0:
+                    print(f"[ epoch {epoch}] print val_losses")
+                    print(val_losses)
+                
                 if cnt >= 3:
                     print(f"[ epoch {epoch} ] Done training dynamics model")
                     print(val_losses)

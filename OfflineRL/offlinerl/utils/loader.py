@@ -197,7 +197,8 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 data['value_hidden'][start_ind:(start_ind + item)] = value_hidden[ind, :item]
                 start_ind += item
             last_start_ind = start_ind
-    
+            torch.cuda.empty_cache()
+
         print('[ DEBUG ]: inferring hidden state done by using transition model')
         if soft_belief_update:
             print(f'[ DEBUG ]: soft belief update with temp {temp}')

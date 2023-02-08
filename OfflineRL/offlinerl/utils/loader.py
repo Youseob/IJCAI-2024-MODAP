@@ -29,6 +29,7 @@ def allocate_hidden_state(replay_pool_full_traj, get_action, make_hidden):
 
 def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                      policy_hook=None, value_hook=None, model_hook=None,\
+                     kl_reg_belief_update=None, kl_reg_lambda=None, \
                      soft_belief_update=None, temp=None,\
                      device=None, fake_env=None, traj_num_to_infer=100):
     import gym
@@ -176,10 +177,16 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
             log_probs = torch.clamp(log_probs, -20, 5.)
             for seq_idx in range(max_traj_len):
                 # likelihood
-                next_belief = belief * torch.exp(log_probs[:, :, seq_idx]).T # (num_dynaics, len(traj_lens_it) ).T
                 # soft belief-update
-                if soft_belief_update: next_belief = torch.softmax(next_belief / temp, dim=1)
-                else: next_belief /= next_belief.sum(-1, keepdim=True)
+                if kl_reg_belief_update: 
+                    next_belief = belief * torch.exp(log_probs[:, :, seq_idx]/kl_reg_lambda).T # (num_dynaics, len(traj_lens_it) ).T
+                    next_belief /= next_belief.sum(-1, keepdim=True)
+                if soft_belief_update: 
+                    next_belief = belief * torch.exp(log_probs[:, :, seq_idx]).T # (num_dynaics, len(traj_lens_it) ).T
+                    next_belief = torch.softmax(next_belief / temp, dim=1)
+                else:
+                    next_belief = belief * torch.exp(log_probs[:, :, seq_idx]).T # (num_dynaics, len(traj_lens_it) ).T
+                    next_belief /= next_belief.sum(-1, keepdim=True)
                 
                 if torch.isnan(next_belief).any():  import pdb; pdb.set_trace()
                 policy_hidden[:, seq_idx, :] = belief.numpy()
@@ -199,6 +206,9 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
         print('[ DEBUG ]: inferring hidden state done by using transition model')
         if soft_belief_update:
             print(f'[ DEBUG ]: soft belief update with temp {temp}')
+        
+        elif kl_reg_belief_update:
+            print(f'[ DEBUG ]: kl_reg belief update with lam {kl_reg_lambda}')
 
     data_target = {k: replay_pool.fields[k] for k in replay_pool.fields}
     traj_target_ind = 0

@@ -21,9 +21,12 @@ hidden_sizes=(16,)
 model_pool_size = 250000
 rollout_batch_size = 10000 # 50000
 traj_num_to_infer = 1000
+uniform_rollout = False
 
 soft_belief_update = False
 soft_belief_temp = None
+kl_reg_belief_update = False
+kl_reg_lambda = 1
 handle_per_round = 400
 out_train_epoch = 1000
 in_train_epoch = 1000 

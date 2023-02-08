@@ -127,6 +127,8 @@ class AlgoTrainer(BaseAlgo):
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
                                  maxlen=self.args['horizon'], policy_hook=None,\
                                  value_hook=None, model_hook=self.transition,\
+                                 kl_reg_belief_update=self.args["kl_reg_belief_update"],\
+                                 kl_reg_lambda=self.args["kl_reg_lambda"],\
                                  soft_belief_update=self.args["soft_belief_update"],\
                                  temp=self.args["soft_belief_temp"], device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
         torch.cuda.empty_cache()
@@ -317,9 +319,11 @@ class AlgoTrainer(BaseAlgo):
                 uncertainty_list.append(uncertainty.mean().item())
                 uncertainty_max.append(uncertainty.max().item())
                 if model_indexes is None:
-                    # model_indexes = np.random.randint(0, next_obses.shape[0], size=(obs.shape[0]))
+                    if self.args["uniform_rollout"]: 
+                        model_indexes = np.random.randint(0, next_obses.shape[0], size=(obs.shape[0]))
                     # belief (rollout_batch_size, num_dynamics)
-                    model_indexes = Categorical(belief).sample().cpu().numpy()
+                    else: 
+                        model_indexes = Categorical(belief).sample().cpu().numpy()
                 next_obs = next_obses[model_indexes, np.arange(obs.shape[0])] # 50000, obs_dim
                 reward = rewards[model_indexes, np.arange(obs.shape[0])]
                 log_prob = torch.stack([log_probs[index][model_indexes, np.arange(obs.shape[0])] for index in range(num_dynamics)]) # num_dynamics, 500000
@@ -527,11 +531,11 @@ class AlgoTrainer(BaseAlgo):
             temp = self.args["soft_belief_temp"]
             return torch.softmax(next_belief / temp, dim=1)
 
-        # if self.args["soft_belief_update"]:
-        #     temp = self.args["soft_belief_temp"]
-        #     next_belief = belief * torch.exp(log_prob/temp).T # bs, num_dynamics
-        #     next_belief /= next_belief.sum(-1, keepdim=True)
-        #     return next_belief
+        elif self.args["kl_reg_belief_update"]:
+            lam = self.args["kl_reg_lambda"]
+            next_belief = belief * torch.exp(log_prob/lam).T # bs, num_dynamics
+            next_belief /= next_belief.sum(-1, keepdim=True)
+            return next_belief
         
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief

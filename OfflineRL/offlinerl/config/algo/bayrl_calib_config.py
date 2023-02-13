@@ -64,7 +64,7 @@ discount = 0.99
 soft_target_tau = 5e-3
 
 horizon = 10
-lam = 0
+lam = 0.25
 
 penalty_clip = 40
 mode = 'normalize' # 'normalize', 'local', 'noRes'

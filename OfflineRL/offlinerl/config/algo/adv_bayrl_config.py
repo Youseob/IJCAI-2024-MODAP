@@ -24,7 +24,7 @@ traj_num_to_infer = 1000
 uniform_rollout = False
 
 soft_belief_update = True
-soft_belief_temp = 50
+soft_belief_temp = 10
 kl_reg_belief_update = False
 kl_reg_lambda = 1
 handle_per_round = 400

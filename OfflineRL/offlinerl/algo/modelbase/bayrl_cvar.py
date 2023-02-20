@@ -248,11 +248,7 @@ class AlgoTrainer(BaseAlgo):
     @torch.no_grad()
     def rollout_model(self,rollout_batch_size, deterministic=False):
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
-        obs = torch.from_numpy(batch['observations']).to(self.device)
         num_dynamics = len(self.transition.output_layer.select)
-
-        belief = torch.from_numpy(batch["policy_hidden"]).to(self.device)
-        
         obs_max = torch.tensor(self.obs_max).to(self.device)
         obs_min = torch.tensor(self.obs_min).to(self.device)
         rew_max = self.rew_max

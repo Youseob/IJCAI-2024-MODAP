@@ -2,27 +2,40 @@ import numpy as np
 
 
 def termination_fn_halfcheetah(obs, act, next_obs):
-    assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+    # assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
 
     not_done = np.logical_and(np.all(next_obs > -100, axis=-1), np.all(next_obs < 100, axis=-1))
     done = ~not_done
-    done = done[:, None]
+    done = done[..., None]
     return done
 
 def termination_fn_hopper(obs, act, next_obs):
-    assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+    if len(next_obs.shape) == 2:
+        # assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+        height = next_obs[:, 0]
+        angle = next_obs[:, 1]
+        not_done =  np.logical_and(np.all(next_obs > -100, axis=-1), np.all(next_obs < 100, axis=-1)) * \
+                    np.isfinite(next_obs).all(axis=-1) \
+                    * np.abs(next_obs[:,1:] < 100).all(axis=-1) \
+                    * (height > .7) \
+                    * (np.abs(angle) < .2)
 
-    height = next_obs[:, 0]
-    angle = next_obs[:, 1]
-    not_done =  np.logical_and(np.all(next_obs > -100, axis=-1), np.all(next_obs < 100, axis=-1)) * \
-                np.isfinite(next_obs).all(axis=-1) \
-                * np.abs(next_obs[:,1:] < 100).all(axis=-1) \
-                * (height > .7) \
-                * (np.abs(angle) < .2)
+        done = ~not_done
+        done = done[:,None]
+        return done
+    else:
+        assert len(next_obs) == 3
+        height = next_obs[..., 0]
+        angle = next_obs[..., 1]
+        not_done =  np.logical_and(np.all(next_obs > -100, axis=-1), np.all(next_obs < 100, axis=-1)) * \
+                    np.isfinite(next_obs).all(axis=-1) \
+                    * np.abs(next_obs[...,1:] < 100).all(axis=-1) \
+                    * (height > .7) \
+                    * (np.abs(angle) < .2)
 
-    done = ~not_done
-    done = done[:,None]
-    return done
+        done = ~not_done
+        done = done[...,None]
+        return done
 
 def termination_fn_halfcheetahveljump(obs, act, next_obs):
     assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
@@ -56,17 +69,17 @@ def termination_fn_ant(obs, act, next_obs):
     return done
 
 def termination_fn_walker2d(obs, act, next_obs):
-    assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+    # assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
 
-    height = next_obs[:, 0]
-    angle = next_obs[:, 1]
+    height = next_obs[..., 0]
+    angle = next_obs[..., 1]
     not_done =  np.logical_and(np.all(next_obs > -100, axis=-1), np.all(next_obs < 100, axis=-1)) \
                 * (height > 0.8) \
                 * (height < 2.0) \
                 * (angle > -1.0) \
                 * (angle < 1.0)
     done = ~not_done
-    done = done[:,None]
+    done = done[...,None]
     return done
 
 def termination_fn_point2denv(obs, act, next_obs):

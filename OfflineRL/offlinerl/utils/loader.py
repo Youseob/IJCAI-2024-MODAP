@@ -28,7 +28,7 @@ def allocate_hidden_state(replay_pool_full_traj, get_action, make_hidden):
     pass
 
 def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
-                     policy_hook=None, value_hook=None, model_hook=None,\
+                     policy_hook=None, value_hook=None, model_hook=None, recalibrated_c=None, \
                      kl_reg_belief_update=None, kl_reg_lambda=None, \
                      soft_belief_update=None, temp=None,\
                      device=None, fake_env=None, traj_num_to_infer=100):
@@ -140,6 +140,11 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
         data['policy_hidden'] = None # np.zeros((data['last_actions'].shape[0], policy_hidden.shape[-1]))
         data['value_hidden'] = None # np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]))
         last_start_ind = 0
+        
+        # if recalibrated_c is not None:
+        #     low_c = torch.from_numpy(recalibrated_c[:, :, 0]).to(device) # num_dynamics, dim
+        #     high_c = torch.from_numpy(recalibrated_c[:, :, 1]).to(device) # num_dynamics, dim
+
         # TODO need to adjust traj_num_to_inter as increase in # of dynamics 
         print(f"[ DEBUG ] {len(traj_lens)} total # traj, {max_traj_len} max_traj_len, {traj_num_to_infer} traj_num_to_infer, {num_dynamics} model")
         for i_ter in range(int(np.ceil(traj_num / traj_num_to_infer))):
@@ -162,7 +167,33 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 obs_action = torch.cat([torch.from_numpy(states).to(device), torch.from_numpy(actions).to(device)], dim=-1) # bs, seq_len, dim
                 next_obs_dists = get_model(obs_action.reshape(len(traj_lens_it)*max_traj_len, -1)) # bs*seq_len, dim -> (num_dynamics, bs*seq_len, dim)
                 next_obses = torch.cat([torch.from_numpy(next_states).to(device), torch.from_numpy(rewards).to(device)], dim=-1).reshape(len(traj_lens_it)*max_traj_len, -1) # bs*seq_len, dim
-                log_probs = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs*seq_len)
+                
+                if recalibrated_c is None:
+                    log_probs = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs*seq_len)
+                else:
+                    import pdb; pdb.set_trace()
+                    from joblib import Parallel, delayed
+                    from tqdm.auto import tqdm
+                    probs_list = []
+                    epsilon = 0.02
+                    low_value = next_obs_dists.cdf(next_obses - epsilon/2).cpu().numpy() # (num_dynamics, bs*seq_len, dim)
+                    high_value = next_obs_dists.cdf(next_obses + epsilon/2).cpu().numpy() # (num_dynamcis, bs*seq_len, dim)
+                    for z in range(low_value.shape[-1]):
+                        def batch_process_function(calibrator, i):
+                            low_quantile = np.clip(calibrator.predict(low_value[i, :, z]), -1e-3, None)
+                            high_quantile = np.clip(calibrator.predict(high_value[i, :, z]), None, 1-1e-3)
+                            return (high_quantile - low_quantile) / epsilon # bs*seq_len)
+                    
+                        probs = Parallel(n_jobs=8)(
+                            delayed(batch_process_function)
+                            (recalibrated_c[z][i], i)
+                            for i in range(num_dynamics)
+                        ) # (num_dynamics, bs*seq_len) 
+                        probs_list.append(probs)
+                    probs = np.clip(np.stack(probs_list).transpose(1, 2, 0), 0., 150)
+                    log_probs = torch.from_numpy(np.log(probs)).to(device).sum(-1) # dim, 100, seq_len 
+                    import pdb; pdb.set_trace()
+
                 del obs_action, next_obs_dists, next_obses
                 torch.cuda.empty_cache()
             
@@ -174,7 +205,8 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
             
             belief = torch.ones(len(traj_lens_it), belief_dim) / belief_dim # (bs, num_dynamics)
             log_probs = log_probs.reshape(num_dynamics, len(traj_lens_it), max_traj_len).cpu()
-            log_probs = torch.clamp(log_probs, -20, 5.)
+            log_probs = torch.clamp(log_probs, -30, 10.)
+            # import pdb; pdb.set_trace()
             for seq_idx in range(max_traj_len):
                 # likelihood
                 # soft belief-update
@@ -193,6 +225,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 value_hidden[:, seq_idx, :] = next_belief.numpy()
                 belief = next_belief
 
+            # import pdb; pdb.set_trace()
             start_ind = last_start_ind
             for ind, item in enumerate(traj_lens_it):
                 if data['policy_hidden'] is None:
@@ -413,7 +446,6 @@ def restore_pool_softlearning(replay_pool, experiment_root, max_size, save_path=
         print('[ mopo/off_policy ] Saving replay pool to: {}'.format(save_path))
         pickle.dump(d, open(save_path, 'wb'))
 
-
 def restore_pool_bear(replay_pool, load_path):
     print('[ mopo/off_policy ] Loading BEAR replay pool from: {}'.format(load_path))
     data = pickle.load(gzip.open(load_path, 'rb'))
@@ -425,7 +457,6 @@ def restore_pool_bear(replay_pool, load_path):
         del data[key]
 
     replay_pool.add_samples(data)
-
 
 def restore_pool_contiguous(replay_pool, load_path):
     print('[ mopo/off_policy ] Loading contiguous replay pool from: {}'.format(load_path))
@@ -481,4 +512,3 @@ def get_illed_med_exp():
             1146000, 1147056, 1147470, 1151830, 1152150, 1154541, 1155304, 1155735, 1156261, 1157092, 1158497,
             1161298, 1162988,
             1163795, 1168075, 1168768, 1171017, 1172762, 1176232, 1178077, 1178961, 1192387]
-

@@ -37,11 +37,13 @@ class Maple_actor(nn.Module):
         pre_sum = -0.5 * (((x - mu) / (torch.exp(log_std) + self.EPS)) ** 2 + 2 * log_std + np.log(2 * np.pi))
         return torch.sum(pre_sum, dim=-1)
 
-    def forward(self, hidden_policy, obs): 
+    def forward(self, hidden_policy, obs, deterministic=False): 
         policy_out = self.mlp(hidden_policy)
         policy_z = torch.cat([policy_out, obs], dim=-1)
         out = self.Guassain_mlp(policy_z)
         mu = self.Guassain_mu_mlp(out)
+        if deterministic:
+            return torch.tanh(mu)
         log_std = self.Guassain_logstd_mlp(out)
         log_std = torch.clip(log_std, self.LOG_MIN_STD, self.LOG_MAX_STD)
         std = torch.exp(log_std)

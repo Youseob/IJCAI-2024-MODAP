@@ -425,6 +425,8 @@ class AlgoTrainer(BaseAlgo):
         belief_49th = [result[4] for result in results]
         belief_99th = [result[5] for result in results]
         belief_last = [result[6] for result in results]
+        init_value_max = [result[7] for result in results]
+        init_value_min = [result[8] for result in results]
 
         rew_mean = np.mean(rewards)
         len_mean = np.mean(episode_lengths)
@@ -439,6 +441,9 @@ class AlgoTrainer(BaseAlgo):
         res["49th_Belief_Max"] = np.mean(belief_49th)
         res["99th_Belief_Max"] = np.mean(belief_99th)
         res["Last_Belief_Max"] = np.mean(belief_last)
+        res["ini_value_max"] = np.mean(init_value_max)
+        res["ini_value_min"] = np.mean(init_value_min)
+
         return res
 
     def test_one_trail(self, env):
@@ -450,7 +455,7 @@ class AlgoTrainer(BaseAlgo):
             rewards = 0
             lengths = 0
             state = state[np.newaxis]
-            init_belief = self.get_adv_belief(rollout_batch_size=1, obs=state, belief=belief)
+            init_belief, values_max, values_min = self.get_adv_belief(rollout_batch_size=1, obs=state, belief=belief, return_values=True)
             belief = torch.from_numpy(init_belief).float().to(self.device)
             state = torch.from_numpy(state).float().to(self.device)
             belief_10th = belief_50th = belief_100th = belief_last = 1. / self.args['transition_select_num']
@@ -474,7 +479,7 @@ class AlgoTrainer(BaseAlgo):
                     belief_100th = belief.max().item()
                 elif done:
                     belief_last = belief.max().item()
-        return (rewards, lengths, init_belief.max(), belief_10th, belief_50th, belief_100th, belief_last)
+        return (rewards, lengths, init_belief.max(), belief_10th, belief_50th, belief_100th, belief_last, values_max, values_min)
     
     @torch.no_grad()
     def belief_update(self, belief, state=None, action=None ,next_state=None, reward=None, log_prob=None):
@@ -496,7 +501,7 @@ class AlgoTrainer(BaseAlgo):
         return next_belief
 
     @torch.no_grad()
-    def get_adv_belief(self,rollout_batch_size, obs, belief, deterministic=True):
+    def get_adv_belief(self,rollout_batch_size, obs, belief, deterministic=True, return_values=False):
         num_dynamics = len(self.transition.output_layer.select)
         obs_max = torch.tensor(self.obs_max).to(self.device)
         obs_min = torch.tensor(self.obs_min).to(self.device)
@@ -545,4 +550,6 @@ class AlgoTrainer(BaseAlgo):
         # (bs, num_dynamics)
         adv_belief = prior_belief * np.exp(mdp_values.T / self.prior_reg)
         adv_belief /= adv_belief.sum(-1, keepdims=True)
+        if return_values:
+            return adv_belief, mdp_values.max(), mdp_values.min()
         return adv_belief

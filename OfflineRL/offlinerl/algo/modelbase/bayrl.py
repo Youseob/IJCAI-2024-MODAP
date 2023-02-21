@@ -1,3 +1,4 @@
+import os
 import torch
 from torch.distributions import Normal, Dirichlet, Categorical
 import numpy as np
@@ -71,7 +72,13 @@ def algo_init(args):
 class AlgoTrainer(BaseAlgo):
     def __init__(self, algo_init, args):
         super(AlgoTrainer, self).__init__(args)
-        self.args = args        
+        self.args = args
+        
+        # vessl hyperparameter 
+        dataset = os.environ.get('dataset', None)
+        if dataset:
+            self.args["task"] = f'd4rl-{str(dataset)}-v2'
+        
         wandb.init(
             config=self.args,
             project=self.args["task"], # "d4rl-halfcheetah-medium-v2"

@@ -24,7 +24,7 @@ def termination_fn_hopper(obs, act, next_obs):
         done = done[:,None]
         return done
     else:
-        assert len(next_obs) == 3
+        # assert len(next_obs.shape) == 3
         height = next_obs[..., 0]
         angle = next_obs[..., 1]
         not_done =  np.logical_and(np.all(next_obs > -100, axis=-1), np.all(next_obs < 100, axis=-1)) * \

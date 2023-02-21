@@ -1,8 +1,7 @@
 #!/bin/bash
-dataset=$1
-init_num=$2
-num_model=$3
-seed=$4
+init_num=$1
+num_model=$2
+seed=$3
 export WANDB_API_KEY=46f753c002a9fa94863acc64899744295fe92165 
 WANDB_MODE=disabled python examples/train_d4rl.py --algo_name=bayrl \
                               --exp_name=bay_rl-$num_model-ensemble \

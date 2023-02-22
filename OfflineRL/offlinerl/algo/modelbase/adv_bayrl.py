@@ -549,7 +549,6 @@ class AlgoTrainer(BaseAlgo):
             belief = next_belief # (rollout_in_each_dynamics, bs, belief_dim)
     
         if self.args["add_value_to_rt"]:
-            print("add value to rt True")
             _, sampled_act, log_prob_act, _ = self.actor(belief, obs)
             value1 = self.target_q1(belief, sampled_act, obs)
             value2 = self.target_q2(belief, sampled_act, obs)

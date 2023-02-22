@@ -22,17 +22,10 @@ model_pool_size = 250000
 rollout_batch_size = 10000 # 50000
 traj_num_to_infer = 1000
 uniform_rollout = False
-
-soft_belief_update = False
-soft_belief_temp = None
-kl_reg_belief_update = False
-kl_reg_lambda = 1
-handle_per_round = 400
+# epoch, batch size
 out_train_epoch = 1000
 in_train_epoch = 1000 
-
 train_batch_size = 256              # train policy num of trajectories
-
 number_runs_eval = 10            # evaluation epochs in mujoco 
 
 #-------------
@@ -64,8 +57,13 @@ discount = 0.99
 soft_target_tau = 5e-3
 
 horizon = 10
-lam = 0
+prior_reg_init = 10
+add_value_to_rt = True
+belief_update_mode = 'bay' # 'bay', 'softmax', 'kl-reg'
+temp = 10 
 
+# uncertainty penalty
+lam = 0
 penalty_clip = 40
 mode = 'normalize' # 'normalize', 'local', 'noRes'
 

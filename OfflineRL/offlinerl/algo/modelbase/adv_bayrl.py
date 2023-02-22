@@ -100,6 +100,9 @@ class AlgoTrainer(BaseAlgo):
         self.args['buffer_size'] = int(self.args['data_collection_per_epoch']) * self.args['horizon'] * 5
         self.args['target_entropy'] = - self.args['action_shape']
         self.args['model_pool_size'] = int(args['model_pool_size'])
+        
+        print(f"[ DEBUG ] exp_name {self.args['exp_name']}")
+
 
     def train(self, train_buffer, val_buffer, callback_fn):
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
@@ -107,6 +110,7 @@ class AlgoTrainer(BaseAlgo):
             ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
             self.transition = ckpt["model"].to(self.device)
             # self.transition_optim = ckpt["optim"]
+            print("[ DEBUG ] load state dict model done")
         else:
             self.train_transition(train_buffer)
             if self.args['dynamics_save_path'] is not None: torch.save(self.transition, self.args['dynamics_save_path'])
@@ -124,10 +128,8 @@ class AlgoTrainer(BaseAlgo):
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
                                  maxlen=self.args['horizon'], policy_hook=None,\
                                  value_hook=None, model_hook=self.transition,\
-                                 kl_reg_belief_update=self.args["kl_reg_belief_update"],\
-                                 kl_reg_lambda=self.args["kl_reg_lambda"],\
-                                 soft_belief_update=self.args["soft_belief_update"],\
-                                 temp=self.args["soft_belief_temp"], device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
+                                 belief_update_mode=self.args["belief_update_mode"], temp=self.args["temp"], \
+                                 device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
         torch.cuda.empty_cache()
         self.obs_max = train_buffer['obs'].max(axis=0)
         self.obs_min = train_buffer['obs'].min(axis=0)
@@ -483,6 +485,7 @@ class AlgoTrainer(BaseAlgo):
     
     @torch.no_grad()
     def belief_update(self, belief, state=None, action=None ,next_state=None, reward=None, log_prob=None):
+        # assert self.args["belief_update_mode"] in ['softmax', 'kl-reg', 'bay']
         if log_prob is None:
             obs_action = torch.cat([state, action], dim=-1) # bs, dim
             next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
@@ -490,14 +493,17 @@ class AlgoTrainer(BaseAlgo):
             log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
             log_prob = torch.clamp(log_prob, -20., 5.)
             
-        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
-        if self.args["soft_belief_update"]:
-            temp = self.args["soft_belief_temp"]
-            return torch.softmax(next_belief / temp, dim=1)
+        if self.args["belief_update_mode"] == 'kl-reg':
+            next_belief = belief * torch.exp(log_prob/self.args['temp']).T # bs, num_dynamics
+            next_belief /= next_belief.sum(-1, keepdim=True)
+            return next_belief
         
+        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics     
+        if self.args["belief_update_mode"] == 'softmax':
+            return torch.softmax(next_belief / self.args['temp'], dim=1)
+        
+        # 'bay"
         next_belief /= next_belief.sum(-1, keepdim=True)
-
-        
         return next_belief
 
     @torch.no_grad()
@@ -526,6 +532,7 @@ class AlgoTrainer(BaseAlgo):
             next_obses = torch.clamp(next_obses, obs_min, obs_max)
             rewards = torch.clamp(rewards, rew_min, rew_max)
             log_probs = torch.clamp(log_probs, -20, 5.) 
+            
             if h == 0:
                 # belief  (bs, belief_dim)
                 next_belief = belief[None, ...] * torch.exp(log_probs) # (rollout_in_each_dynamics, bs, belief_dim)
@@ -541,12 +548,13 @@ class AlgoTrainer(BaseAlgo):
             obs = next_obses # (num_dynamics, bs, dim)
             belief = next_belief # (rollout_in_each_dynamics, bs, belief_dim)
     
-        _, sampled_act, log_prob_act, _ = self.actor(belief, obs)
-        value1 = self.target_q1(belief, sampled_act, obs)
-        value2 = self.target_q2(belief, sampled_act, obs)
-        value = torch.min(value1, value2) - torch.exp(self.log_alpha) * log_prob_act.unsqueeze(-1)
-        # (num_dynamics, bs)
-        mdp_values += (self.args['discount']**(self.args['horizon'])) * current_nonterm * value.cpu().numpy().squeeze(-1)
+        if self.args["add_value_to_rt"]:
+            _, sampled_act, log_prob_act, _ = self.actor(belief, obs)
+            value1 = self.target_q1(belief, sampled_act, obs)
+            value2 = self.target_q2(belief, sampled_act, obs)
+            value = torch.min(value1, value2) - torch.exp(self.log_alpha) * log_prob_act.unsqueeze(-1)
+            # (num_dynamics, bs)
+            mdp_values += (self.args['discount']**(self.args['horizon'])) * current_nonterm * value.cpu().numpy().squeeze(-1)
         # (bs, num_dynamics)
         adv_belief = prior_belief * np.exp(mdp_values.T / self.prior_reg)
         adv_belief /= adv_belief.sum(-1, keepdims=True)

@@ -129,10 +129,8 @@ class AlgoTrainer(BaseAlgo):
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
                                  maxlen=self.args['horizon'], policy_hook=None,\
                                  value_hook=None, model_hook=self.transition,\
-                                 kl_reg_belief_update=self.args["kl_reg_belief_update"],\
-                                 kl_reg_lambda=self.args["kl_reg_lambda"],\
-                                 soft_belief_update=self.args["soft_belief_update"],\
-                                 temp=self.args["soft_belief_temp"], device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
+                                 belief_update_mode=self.args["belief_update_mode"], temp=self.args["temp"], \
+                                 device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
         torch.cuda.empty_cache()
         self.obs_max = train_buffer['obs'].max(axis=0)
         self.obs_min = train_buffer['obs'].min(axis=0)
@@ -167,18 +165,9 @@ class AlgoTrainer(BaseAlgo):
             
             # evaluate in mujoco
             eval_loss = self.eval_policy()
-            # if i % 100 == 0 or i == self.args['out_train_epoch'] - 1:
-            #     self.eval_one_trajectory()
             train_loss.update(eval_loss)
-            # perf = self.eval_rollout_model(10, True)
-            # train_loss.update(perf)
             torch.cuda.empty_cache()
             self.log_res(i, train_loss)
-            # if i%4 == 0:
-            #     loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
-            #                      maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
-            #                      value_hook=self.value_gru, device=self.device)
-            # torch.cuda.empty_cache()
 
     def get_train_policy_batch(self, batch_size = None):
         batch_size = batch_size or self.args['train_batch_size']
@@ -336,8 +325,6 @@ class AlgoTrainer(BaseAlgo):
                 log_prob = torch.clamp(log_prob, -20, 5.)
                 next_belief = self.belief_update(belief, log_prob=log_prob)
                 
-                # print('average reward:', reward.mean().item())
-                # print('average uncertainty:', uncertainty.mean().item())
 
                 penalized_reward = reward - self.args['lam'] * uncertainty
 
@@ -360,7 +347,7 @@ class AlgoTrainer(BaseAlgo):
             self.model_pool._pointer += num_samples
             self.model_pool._pointer %= self.model_pool._max_size
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
-        return np.mean(uncertainty_list), np.max(uncertainty_max)
+        return
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -521,6 +508,7 @@ class AlgoTrainer(BaseAlgo):
     
     @torch.no_grad()
     def belief_update(self, belief, state=None, action=None ,next_state=None, reward=None, log_prob=None):
+        # assert self.args["belief_update_mode"] in ['softmax', 'kl-reg', 'bay']
         if log_prob is None:
             obs_action = torch.cat([state, action], dim=-1) # bs, dim
             next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
@@ -528,16 +516,15 @@ class AlgoTrainer(BaseAlgo):
             log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
             log_prob = torch.clamp(log_prob, -20., 5.)
             
-        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
-        if self.args["soft_belief_update"]:
-            temp = self.args["soft_belief_temp"]
-            return torch.softmax(next_belief / temp, dim=1)
-
-        elif self.args["kl_reg_belief_update"]:
-            lam = self.args["kl_reg_lambda"]
-            next_belief = belief * torch.exp(log_prob/lam).T # bs, num_dynamics
-            next_belief /= next_belief.sum(-1, keepdim=True)
-            return next_belief
+        if self.args["belief_update_mode"] == 'kl-reg':
+            next_belief = belief * torch.exp(log_prob/self.args['temp']).T # bs, num_dynamics
+            return 
         
+        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics     
+        if self.args["belief_update_mode"] == 'softmax':
+            return torch.softmax(next_belief / self.args['temp'], dim=1)
+        
+        # 'bay"
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief
+        

@@ -236,11 +236,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
             last_start_ind = start_ind
 
         print('[ DEBUG ]: inferring hidden state done by using transition model')
-        if soft_belief_update:
-            print(f'[ DEBUG ]: soft belief update with temp {temp}')
-        
-        elif kl_reg_belief_update:
-            print(f'[ DEBUG ]: kl_reg belief update with lam {kl_reg_lambda}')
+        print(f'[ DEBUG ]: {belief_update_mode} belief update with {temp}')
 
     data_target = {k: replay_pool.fields[k] for k in replay_pool.fields}
     traj_target_ind = 0

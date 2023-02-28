@@ -59,6 +59,7 @@ soft_target_tau = 5e-3
 horizon = 10
 lam = 0
 belief_update_mode = 'bay' # 'softmax', 'kl-reg' 
+temp = None
 
 penalty_clip = 40
 mode = 'normalize' # 'normalize', 'local', 'noRes'

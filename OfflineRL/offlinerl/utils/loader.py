@@ -28,7 +28,7 @@ def allocate_hidden_state(replay_pool_full_traj, get_action, make_hidden):
     pass
 
 def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
-                     policy_hook=None, value_hook=None, model_hook=None, recalibrated_c=None, \
+                     policy_hook=None, value_hook=None, model_hook=None, calib_scale=None, \
                      belief_update_mode="bay", temp=None,\
                      device=None, fake_env=None, traj_num_to_infer=100):
     import gym
@@ -167,31 +167,34 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 next_obs_dists = get_model(obs_action.reshape(len(traj_lens_it)*max_traj_len, -1)) # bs*seq_len, dim -> (num_dynamics, bs*seq_len, dim)
                 next_obses = torch.cat([torch.from_numpy(next_states).to(device), torch.from_numpy(rewards).to(device)], dim=-1).reshape(len(traj_lens_it)*max_traj_len, -1) # bs*seq_len, dim
                 
-                if recalibrated_c is None:
+                if calib_scale is None:
                     log_probs = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs*seq_len)
                 else:
-                    import pdb; pdb.set_trace()
-                    from joblib import Parallel, delayed
-                    from tqdm.auto import tqdm
-                    probs_list = []
-                    epsilon = 0.02
-                    low_value = next_obs_dists.cdf(next_obses - epsilon/2).cpu().numpy() # (num_dynamics, bs*seq_len, dim)
-                    high_value = next_obs_dists.cdf(next_obses + epsilon/2).cpu().numpy() # (num_dynamcis, bs*seq_len, dim)
-                    for z in range(low_value.shape[-1]):
-                        def batch_process_function(calibrator, i):
-                            low_quantile = np.clip(calibrator.predict(low_value[i, :, z]), -1e-3, None)
-                            high_quantile = np.clip(calibrator.predict(high_value[i, :, z]), None, 1-1e-3)
-                            return (high_quantile - low_quantile) / epsilon # bs*seq_len)
+                    # import pdb; pdb.set_trace()
+                    # from joblib import Parallel, delayed
+                    # from tqdm.auto import tqdm
+                    # probs_list = []
+                    # epsilon = 0.02
+                    # low_value = next_obs_dists.cdf(next_obses - epsilon/2).cpu().numpy() # (num_dynamics, bs*seq_len, dim)
+                    # high_value = next_obs_dists.cdf(next_obses + epsilon/2).cpu().numpy() # (num_dynamcis, bs*seq_len, dim)
+                    # for z in range(low_value.shape[-1]):
+                    #     def batch_process_function(calibrator, i):
+                    #         low_quantile = np.clip(calibrator.predict(low_value[i, :, z]), -1e-3, None)
+                    #         high_quantile = np.clip(calibrator.predict(high_value[i, :, z]), None, 1-1e-3)
+                    #         return (high_quantile - low_quantile) / epsilon # bs*seq_len)
                     
-                        probs = Parallel(n_jobs=8)(
-                            delayed(batch_process_function)
-                            (recalibrated_c[z][i], i)
-                            for i in range(num_dynamics)
-                        ) # (num_dynamics, bs*seq_len) 
-                        probs_list.append(probs)
-                    probs = np.clip(np.stack(probs_list).transpose(1, 2, 0), 0., 150)
-                    log_probs = torch.from_numpy(np.log(probs)).to(device).sum(-1) # dim, 100, seq_len 
-                    import pdb; pdb.set_trace()
+                    #     probs = Parallel(n_jobs=8)(
+                    #         delayed(batch_process_function)
+                    #         (recalibrated_c[z][i], i)
+                    #         for i in range(num_dynamics)
+                    #     ) # (num_dynamics, bs*seq_len) 
+                    #     probs_list.append(probs)
+                    # probs = np.clip(np.stack(probs_list).transpose(1, 2, 0), 0., 150)
+                    # log_probs = torch.from_numpy(np.log(probs)).to(device).sum(-1) # dim, 100, seq_len 
+                    # num_dynamics, bs*seq_len, dim
+                    next_obs_dists.scale *= calib_scale[:, None, :] 
+                    log_probs = next_obs_dists.log_prob(next_obses).sum(-1)
+                    
 
                 del obs_action, next_obs_dists, next_obses
                 torch.cuda.empty_cache()

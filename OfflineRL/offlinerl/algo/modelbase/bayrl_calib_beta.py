@@ -106,7 +106,6 @@ class AlgoTrainer(BaseAlgo):
         self.args['buffer_size'] = int(self.args['data_collection_per_epoch']) * self.args['horizon'] * 5
         self.args['target_entropy'] = - self.args['action_shape']
         self.args['model_pool_size'] = int(args['model_pool_size'])
-        self.scales = None
 
     def train(self, train_buffer, val_buffer, callback_fn):
         if self.args['dynamics_path'] is not None:
@@ -122,6 +121,7 @@ class AlgoTrainer(BaseAlgo):
         if self.args['only_dynamics']:
             return
         self.transition.requires_grad_(False)
+        self.recalibrated_c = []
         if True : #calibrate
             data_size = len(train_buffer)
             val_size = min(int(data_size * 0.2) + 1, 1000)
@@ -130,13 +130,28 @@ class AlgoTrainer(BaseAlgo):
             valdata = train_buffer[val_splits.indices]
             valdata.to_torch(device=self.device)
             dist = self.transition(torch.cat([valdata['obs'], valdata['act']], dim=-1))
-            
-            # num_dynamics, bs, dim
-            self.scales = (dist.mean - torch.cat([valdata["obs_next"], valdata["rew"]], dim=-1)) ** 2
-            self.scales *= dist.scale ** -2
-            # num_dynamics, dim
-            self.scales = torch.sqrt(self.scales.mean(1))
+            cdfs = dist.cdf(torch.cat([valdata['obs_next'], valdata['rew']], dim=-1)) # num_dynamics, batch_size, dim
+
+            from joblib import Parallel, delayed
+            from tqdm.auto import tqdm
+
+            for z in range(cdfs.shape[-1]):
+                P_hat = (cdfs[..., z].unsqueeze(1) <= cdfs[..., z].unsqueeze(-1).repeat(1, 1, val_size)).sum(-1) / val_size # num_dynamics, batch_size
+                def batch_process_function(i, payload):
+                    calibrator = IsotonicRegression(out_of_bounds='clip')
+                    calibrator.fit(cdfs[i, :, z].cpu().numpy(), P_hat[i].cpu().numpy())
+                    return calibrator
+                
+                recalibrated_c = Parallel(n_jobs=8)(
+                    delayed(batch_process_function)
+                    (i, None)
+                    for i in range(self.args["transition_select_num"])
+                ) # transition_select_num, 2
+                self.recalibrated_c.append(recalibrated_c) # dim, 100
         ###################################################################################################################
+        self.recalibrated_c[0][0].predict([[0.025]])
+        import pdb; pdb.set_trace()
+        # self.recalibrated_c = np.stack(self.recalibrated_c).transpose(1, 0, 2) # num_dynamics, dim, 2
         env_pool_size = int((train_buffer.shape[0]/self.args['horizon']) * 1.2)
         self.env_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
                                              self.args['transition_select_num'], env_pool_size)
@@ -144,11 +159,12 @@ class AlgoTrainer(BaseAlgo):
                                                self.args['transition_select_num'],self.args['model_pool_size'])
 
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
-                                maxlen=self.args['horizon'], policy_hook=None,\
-                                value_hook=None, model_hook=self.transition, calib_scale=self.scales, \
-                                belief_update_mode=self.args["belief_update_mode"], temp=self.args["temp"], \
-                                device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
-
+                                 maxlen=self.args['horizon'], policy_hook=None,\
+                                 value_hook=None, model_hook=self.transition, recalibrated_c=self.recalibrated_c, \
+                                 kl_reg_belief_update=self.args["kl_reg_belief_update"],\
+                                 kl_reg_lambda=self.args["kl_reg_lambda"],\
+                                 soft_belief_update=self.args["soft_belief_update"],\
+                                 temp=self.args["soft_belief_temp"], device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
         torch.cuda.empty_cache()
         self.obs_max = train_buffer['obs'].max(axis=0)
         self.obs_min = train_buffer['obs'].min(axis=0)
@@ -164,13 +180,15 @@ class AlgoTrainer(BaseAlgo):
 
         for i in range(self.args['out_train_epoch']):
             for _ in range(50000 // self.args["rollout_batch_size"]):
-                self.rollout_model(self.args['rollout_batch_size'])
+                uncertainty_mean, uncertainty_max = self.rollout_model(self.args['rollout_batch_size'])
             
             torch.cuda.empty_cache()
 
             train_loss = {}
             train_loss['policy_loss'] = 0
             train_loss['q_loss'] = 0
+            train_loss['uncertainty_mean'] = uncertainty_mean
+            train_loss['uncertainty_max'] = uncertainty_max
             for j in range(self.args['in_train_epoch']):
                 batch = self.get_train_policy_batch(self.args['train_batch_size'])
                 in_res = self.train_policy(batch)
@@ -280,6 +298,9 @@ class AlgoTrainer(BaseAlgo):
                     print(val_losses)
                     break
                 
+
+
+
             indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])
             self.transition.set_select(indexes)
         return self.transition
@@ -303,25 +324,35 @@ class AlgoTrainer(BaseAlgo):
         current_nonterm = np.ones((len(obs)), dtype=bool)
         samples = None
         model_indexes = None
+        tscale_param = self.calibration_param.clone()
         for i in range(self.args['horizon']):
             with torch.no_grad():
                 act = self.get_meta_action(obs, belief, deterministic)
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)
                 next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
-                if self.scales is not None:
-                    next_obs_dists.scale *= self.scales[:, None, :]
                 log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
                 # log_probs = next_obs_dists.log_prob(next_obses[None, ...].repeat(num_dynamics, 1, 1, 1)).sum(-1) # (num_dynamics, num_dynamics, rollout_batch_size)
                 rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
                 next_obses = next_obses[:, :, :-1]
-            
+
+            next_obses_mode = next_obs_dists.mean[:, :, :-1]
+            next_obs_mean = torch.mean(next_obses_mode, dim=0)
+            diff = next_obses_mode - next_obs_mean
+            disagreement_uncertainty = torch.max(torch.norm(diff, dim=-1, keepdim=True), dim=0)[0]
+            aleatoric_uncertainty = torch.max(torch.norm(next_obs_dists.stddev, dim=-1, keepdim=True), dim=0)[0]
+            uncertainty = disagreement_uncertainty if self.args['uncertainty_mode'] == 'disagreement' else aleatoric_uncertainty
+            uncertainty = torch.clamp(uncertainty, max=self.args['penalty_clip'])
+            uncertainty_list.append(uncertainty.mean().item())
+            uncertainty_max.append(uncertainty.max().item())
             if model_indexes is None:
                 if self.args["uniform_rollout"]: 
                     model_indexes = np.random.randint(0, next_obses.shape[0], size=(obs.shape[0]))
+                    
                 # belief (rollout_batch_size, num_dynamics)
                 else: 
                     model_indexes = Categorical(belief).sample().cpu().numpy()
+                labels = torch.tensor(model_indexes, dtype=torch.long).to(self.device)
             next_obs = next_obses[model_indexes, np.arange(obs.shape[0])] # 50000, obs_dim
             reward = rewards[model_indexes, np.arange(obs.shape[0])]
             log_prob = torch.stack([log_probs[index][model_indexes, np.arange(obs.shape[0])] for index in range(num_dynamics)]) # num_dynamics, 500000
@@ -329,7 +360,7 @@ class AlgoTrainer(BaseAlgo):
             term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
             next_obs = torch.clamp(next_obs, obs_min, obs_max)
             reward = torch.clamp(reward, rew_min, rew_max)
-            log_prob = torch.clamp(log_prob, -20, 5.)
+            log_prob = torch.clamp(log_prob, -20, 5.) - torch.log(tscale_param)
             next_belief = self.belief_update(belief, log_prob=log_prob)
             
             # penalized_reward = reward - self.args['lam'] * uncertainty
@@ -353,7 +384,7 @@ class AlgoTrainer(BaseAlgo):
         self.model_pool._pointer += num_samples
         self.model_pool._pointer %= self.model_pool._max_size
         self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
-        return 
+        return np.mean(uncertainty_list), np.max(uncertainty_max)
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -514,7 +545,6 @@ class AlgoTrainer(BaseAlgo):
     
     @torch.no_grad()
     def belief_update(self, belief, state=None, action=None ,next_state=None, reward=None, log_prob=None):
-        # assert self.args["belief_update_mode"] in ['softmax', 'kl-reg', 'bay']
         if log_prob is None:
             obs_action = torch.cat([state, action], dim=-1) # bs, dim
             next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
@@ -522,15 +552,18 @@ class AlgoTrainer(BaseAlgo):
             log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
             log_prob = torch.clamp(log_prob, -20., 5.)
             
-        if self.args["belief_update_mode"] == 'kl-reg':
-            next_belief = belief * torch.exp(log_prob/self.args['temp']).T # bs, num_dynamics
-            return 
-        
-        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics     
-        if self.args["belief_update_mode"] == 'softmax':
-            return torch.softmax(next_belief / self.args['temp'], dim=1)
-        
-        # 'bay"
+        if self.args["soft_belief_update"]:
+            next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
+            temp = self.args["soft_belief_temp"]
+            return torch.softmax(next_belief / temp, dim=1)
+
+        elif self.args["kl_reg_belief_update"]:
+            lam = self.args["kl_reg_lambda"]
+            next_belief = belief * torch.exp(log_prob/lam).T # bs, num_dynamics
+            next_belief /= next_belief.sum(-1, keepdim=True)
+            return next_belief
+
+        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief
 

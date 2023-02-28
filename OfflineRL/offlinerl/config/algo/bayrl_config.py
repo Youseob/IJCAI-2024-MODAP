@@ -57,8 +57,8 @@ discount = 0.99
 soft_target_tau = 5e-3
 
 horizon = 10
-prior_reg_init = 10
-add_value_to_rt = True
+# prior_reg_init = 10
+# add_value_to_rt = True
 belief_update_mode = 'bay' # 'bay', 'softmax', 'kl-reg'
 temp = 10 
 

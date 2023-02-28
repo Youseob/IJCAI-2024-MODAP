@@ -518,6 +518,7 @@ class AlgoTrainer(BaseAlgo):
         if log_prob is None:
             obs_action = torch.cat([state, action], dim=-1) # bs, dim
             next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
+            next_obs_dists.scale *= self.scales[:, None, :]
             next_obses = torch.cat([next_state, reward], dim=-1) # bs, dim
             log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
             log_prob = torch.clamp(log_prob, -20., 5.)

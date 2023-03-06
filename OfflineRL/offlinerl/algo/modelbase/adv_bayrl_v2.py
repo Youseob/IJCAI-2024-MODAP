@@ -327,8 +327,7 @@ class AlgoTrainer(BaseAlgo):
                 mdp_values += (self.args['discount']**(self.args['horizon'])) * torch.from_numpy(current_nonterm).to(self.device) * value.squeeze(-1)
             
         # belief_net update
-        import pdb; pdb.set_trace()
-        mdp_values *= self.args["reward_scale"]
+        mdp_values *= -self.args["reward_scale"]
         mdp_values += reg
         probs = torch.softmax(logits, dim=-1)[np.arange(obs.shape[0]), model_indexes]
 

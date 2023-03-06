@@ -10,5 +10,5 @@ python examples/train_d4rl.py --algo_name=adv_bayrl_v2 \
                               --temp=$temp \
                               --add_value_to_rt=$add_value \
                               --b_lr=$b_lr \
-                              --reward_scale=$r_scale
+                              --reward_scale=$r_scale \
                               --seed=$seed

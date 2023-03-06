@@ -17,7 +17,7 @@ import offlinerl.utils.loader as loader
 from offlinerl.utils.net.terminal_check import is_terminal
 
 from offlinerl.utils.data import ModelBuffer
-from offlinerl.utils.net.model.ensemble import EnsembleTransition
+from offlinerl.utils.net.model.ensemble import EnsembleTransition, GammaPriorNNEnsemble
 from offlinerl.utils.net.maple_actor import Maple_actor
 from offlinerl.utils.net.model.maple_critic import Maple_critic
 from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
@@ -43,8 +43,13 @@ def algo_init(args):
 
     args['data_name'] = args['task'][5:]
 
-    transition = EnsembleTransition(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
-                                    args['transition_init_num'], mode=args['mode']).to(args['device'])
+    if args["model_type"] == 'esnn':
+        transition = EnsembleTransition(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
+                                        args['transition_init_num'], mode=args['mode']).to(args['device'])
+    elif args["model_type"] =="ivgesnn":
+        transition = GammaPriorNNEnsemble(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
+                                        args['transition_init_num'], mode=args['mode']).to(args['device'])
+    
     transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
 
 
@@ -142,6 +147,7 @@ class AlgoTrainer(BaseAlgo):
         self.obs_min = np.minimum(self.obs_min, -100)
 
         self.rew_max = train_buffer['rew'].max()
+        # self.args["lam"] == 0
         self.rew_min = train_buffer['rew'].min() - self.args['penalty_clip'] * self.args['lam']
 
         for i in range(self.args['out_train_epoch']):
@@ -263,8 +269,6 @@ class AlgoTrainer(BaseAlgo):
                     print(val_losses)
                     break
                 
-
-
 
             indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])
             self.transition.set_select(indexes)

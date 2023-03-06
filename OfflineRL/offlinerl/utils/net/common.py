@@ -175,6 +175,17 @@ class Swish(nn.Module):
     def forward(self, x):
         return x * torch.sigmoid(x)
 
+class translatedSigmoid(torch.nn.Module):
+    def __init__(self):
+        super(translatedSigmoid, self).__init__()
+        self.beta = torch.nn.Parameter(torch.tensor([1.5]))
+        
+    def forward(self, x):
+        beta = torch.nn.functional.softplus(self.beta)
+        alpha = -beta*(6.9077542789816375)
+        return torch.sigmoid((x+alpha)/beta)
+
+
 class MLP(nn.Module):
     r"""
         Multi-layer Perceptron

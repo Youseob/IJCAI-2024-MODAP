@@ -5,16 +5,30 @@ task = "Hopper-v3"
 task_data_type = "low"
 task_train_num = 99
 
-seed = 42 
+# wandb_mode = "enabled"
+seed = 42
 
 device = 'cuda'+":"+str(select_free_cuda()) if torch.cuda.is_available() else 'cpu'
+# device = 'cuda:0'
 obs_shape = None
 act_shape = None
 max_action = None
+# new parameters based on mopo
+lstm_hidden_unit = 128
+Guassain_hidden_sizes = (256,256)
+value_hidden_sizes=(256,256)
+hidden_sizes=(16,)
+model_pool_size = 250000
+rollout_batch_size = 10000 # 50000
+traj_num_to_infer = 1000
+uniform_rollout = False
+# epoch, batch size
+out_train_epoch = 1000
+in_train_epoch = 1000 
+train_batch_size = 256              # train policy num of trajectories
+number_runs_eval = 10            # evaluation epochs in mujoco 
 
-init_policy_epoch = 50000 
-
-#--------------------
+#-------------
 dynamics_path = None
 dynamics_save_path = None
 only_dynamics = False
@@ -23,29 +37,35 @@ hidden_layer_size = 256
 hidden_layers = 2
 transition_layers = 4
 
-transition_init_num = 7
-transition_select_num = 5
+calibration = True
+model_type = 'esnn' # 'ivgesnn'
+transition_init_num = 23
+transition_select_num = 20
+transition_epoch = None
 
 real_data_ratio = 0.05
-
 transition_batch_size = 256
 policy_batch_size = 256
 data_collection_per_epoch = 50e3
 steps_per_epoch = 1000
-max_epoch = 200
+max_epoch = 1000
 
 learnable_alpha = True
 uncertainty_mode = 'aleatoric'
-transition_lr = 1e-3
+transition_lr = 1e-4
 actor_lr = 3e-4
 critic_lr = 3e-4
 discount = 0.99
 soft_target_tau = 5e-3
-number_runs_eval = 10
 
+horizon = 10
+belief_update_mode = 'bay' # 'bay', 'softmax', 'kl-reg'
+temp = 10 
 
-horizon = 5
-lam = 2
+# uncertainty penalty
+lam = 0
+penalty_clip = 40
+mode = 'normalize' # 'normalize', 'local', 'noRes'
 
 #tune
 params_tune = {

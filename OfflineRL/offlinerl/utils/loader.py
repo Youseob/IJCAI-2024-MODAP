@@ -28,7 +28,7 @@ def allocate_hidden_state(replay_pool_full_traj, get_action, make_hidden):
     pass
 
 def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
-                     policy_hook=None, value_hook=None, model_hook=None, calib_scale=None, \
+                     policy_hook=None, value_hook=None, model_hook=None, calibrator=None, \
                      belief_update_mode="bay", temp=None,\
                      device=None, fake_env=None, traj_num_to_infer=100):
     import gym
@@ -167,7 +167,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 next_obs_dists = get_model(obs_action.reshape(len(traj_lens_it)*max_traj_len, -1)) # bs*seq_len, dim -> (num_dynamics, bs*seq_len, dim)
                 next_obses = torch.cat([torch.from_numpy(next_states).to(device), torch.from_numpy(rewards).to(device)], dim=-1).reshape(len(traj_lens_it)*max_traj_len, -1) # bs*seq_len, dim
                 
-                if calib_scale is None:
+                if calibrator is None:
                     log_probs = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs*seq_len)
                 else:
                     # import pdb; pdb.set_trace()
@@ -192,8 +192,8 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                     # probs = np.clip(np.stack(probs_list).transpose(1, 2, 0), 0., 150)
                     # log_probs = torch.from_numpy(np.log(probs)).to(device).sum(-1) # dim, 100, seq_len 
                     # num_dynamics, bs*seq_len, dim
-                    next_obs_dists.scale *= calib_scale[:, None, :] 
-                    log_probs = next_obs_dists.log_prob(next_obses).sum(-1)
+                    probs = calibrator.calibrated_prob(next_obses, pred_dist=next_obs_dists)
+                    log_probs = probs.log().sum(-1)
                     
 
                 del obs_action, next_obs_dists, next_obses
@@ -238,9 +238,12 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                 start_ind += item
             last_start_ind = start_ind
 
-        print('[ DEBUG ]: inferring hidden state done by using transition model')
+        if calibrator is not None:
+            print('[ DEBUG ]: inferring hidden state done by using calibrated transition model')
+        else: 
+            print('[ DEBUG ]: inferring hidden state done by using transition model')
         print(f'[ DEBUG ]: {belief_update_mode} belief update with {temp}')
-
+            
     data_target = {k: replay_pool.fields[k] for k in replay_pool.fields}
     traj_target_ind = 0
     mini_target_ind = 0

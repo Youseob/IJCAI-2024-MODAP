@@ -1,7 +1,7 @@
 import torch
-
+from torch.nn import functional as F
 from offlinerl.utils.function import soft_clamp
-from offlinerl.utils.net.common import Swish
+from offlinerl.utils.net.common import Swish, translatedSigmoid
 
 class EnsembleLinear(torch.nn.Module):
     def __init__(self, in_features, out_features, ensemble_size=7):
@@ -41,6 +41,95 @@ class EnsembleLinear(torch.nn.Module):
     def update_save(self, indexes):
         self.saved_weight.data[indexes] = self.weight.data[indexes]
         self.saved_bias.data[indexes] = self.bias.data[indexes]
+
+class RecalibrationLayer(torch.nn.Module):
+    def __init__(self, out_features, ensemble_size=7):
+        super().__init__()
+
+        self.ensemble_size = ensemble_size
+
+        self.register_parameter('weight', torch.nn.Parameter(torch.zeros(ensemble_size, 1, out_features)))
+        self.register_parameter('bias', torch.nn.Parameter(torch.zeros(ensemble_size, 1, out_features)))
+
+        torch.nn.init.trunc_normal_(self.weight, std=1/(2*out_features**0.5))
+        torch.nn.init.trunc_normal_(self.bias, std=1/(2*out_features**0.5))
+
+        self.register_parameter('saved_weight', torch.nn.Parameter(self.weight.detach().clone()))
+        self.register_parameter('saved_bias', torch.nn.Parameter(self.bias.detach().clone()))
+
+        self.select = list(range(0, self.ensemble_size))
+
+    def forward(self, x, activation=True):
+        weight = self.weight[self.select]
+        bias = self.bias[self.select]
+
+        x = weight * x + bias
+        if activation: return torch.sigmoid(x)
+        return x
+
+    @torch.no_grad()
+    def calibrated_prob(self, y, mu=None, std=None, pred_dist=None):
+        # R o CDF -> R'(cdf(x)) * pdf(x)
+        if pred_dist is None:
+            assert mu is not None and std is not None
+            pred_dist = torch.distributions.Normal(mu, std)
+        # en, bs, dim
+        log_prob = pred_dist.log_prob(y)
+        
+        cdf_pred = pred_dist.cdf(y)
+        # R'(cdf(x))
+        pdf_cal = torch.sigmoid(cdf_pred) * (1 - torch.sigmoid(cdf_pred)) * self.weight
+        pdf_cal *= log_prob.exp()
+        return pdf_cal
+    
+    def calibrate(self, y, optim, mu=None, std=None, pred_dist=None):
+        if pred_dist is None:
+            assert mu is not None and std is not None
+            pred_dist = torch.distributions.Normal(mu, std)
+        # num_dynamics, bs, dim
+        pred_cdf =pred_dist.cdf(y)
+        train_x = torch.zeros_like(pred_cdf)
+        train_y = torch.zeros_like(pred_cdf)
+        # element-wise calibration
+        for d in range(pred_cdf.shape[-1]):
+            # num_dynamics, bs
+            cdf = pred_cdf[..., d]
+            # bs, num_dynamics
+            target = torch.stack([torch.sum(cdf < p.unsqueeze(-1), dim=-1)/cdf.shape[1] for p in cdf.T])
+
+            train_x[..., d] = cdf
+            train_y[..., d] = target.T
+        
+        batch_size = 32
+        idxs = np.random.randint(y.shape[0], size=y.shape[0])
+        for epoch in range(1000):
+            for batch_num in range(int(np.ceil(idxs.shape[-1] / batch_size))):
+                batch_idxs = idxs[batch_num * batch_size:(batch_num + 1) * batch_size]
+                logits = self.forward(train_x[:, batch_idxs, :], activation=False)
+                labels = train_y[:, batch_idxs, :]
+
+                # bs, num_dynamics, dim
+                loss = F.binary_cross_entropy_with_logits(logits, labels)
+                optim.zero_grad()
+                loss.backward()
+                optim.step()
+            if epoch % 100 == 0:
+                print(loss.item())
+                
+                nll = -torch.log(self.calibrated_prob(y, pred_dist=pred_dist)).sum(-1).mean(-1)
+                print(nll)
+
+        
+    def set_select(self, indexes):
+        assert len(indexes) <= self.ensemble_size and max(indexes) < self.ensemble_size
+        self.select = indexes
+        self.weight.data[indexes] = self.saved_weight.data[indexes]
+        self.bias.data[indexes] = self.saved_bias.data[indexes]
+
+    def update_save(self, indexes):
+        self.saved_weight.data[indexes] = self.weight.data[indexes]
+        self.saved_bias.data[indexes] = self.bias.data[indexes]
+
 
 class EnsembleTransition(torch.nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_features, hidden_layers, ensemble_size=7, mode='local', with_reward=True):
@@ -119,47 +208,42 @@ class EnsembleTransition(torch.nn.Module):
             layer.update_save(indexes)
         self.output_layer.update_save(indexes)
 
-class GMM_EnsembleTransition(torch.nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_features, hidden_layers, ensemble_size=7, with_reward=True, num_category=4, num_classes=4):
+
+#https://github.com/JorgensenMart/ReliableVarianceNetworks/blob/master/experiment_regression.py
+# def john(args, X, y, Xval, yval):
+from torch.distributions.studentT import StudentT
+from torch.distributions.gamma import Gamma
+import numpy as np
+
+class GammaPriorNNEnsemble(torch.nn.Module):
+    def __init__(self, obs_dim, action_dim, hidden_features, hidden_layers, ensemble_size=7, mode='local', with_reward=True):
         super().__init__()
         self.obs_dim = obs_dim
+        self.mode = mode
         self.with_reward = with_reward
         self.ensemble_size = ensemble_size
-        self.num_category = num_category
-        self.num_classes = num_classes
-        self.activation = Swish()
+        self.activation = torch.nn.ReLU()
+        self.num_draws_train = 20
 
-        pre_module_list = []
-        for i in range(hidden_layers // 2):
+        module_list = []
+        for i in range(hidden_layers):
             if i == 0:
-                pre_module_list.append(EnsembleLinear(obs_dim + action_dim, hidden_features, ensemble_size))
+                module_list.append(EnsembleLinear(obs_dim + action_dim, hidden_features, ensemble_size))
             else:
-                pre_module_list.append(EnsembleLinear(hidden_features, hidden_features, ensemble_size))
-        self.backbones = torch.nn.ModuleList(pre_module_list)
-        self.categorical_layer = EnsembleLinear(hidden_features, num_classes*num_category, ensemble_size)
-
-        post_module_list = []
-        for j in range(hidden_layers // 2):
-            if j == 0:
-                post_module_list.append(torch.nn.Linear(num_classes*num_category, hidden_features))
-            else:
-                post_module_list.append(torch.nn.Linear(hidden_features, hidden_features))
-        self.post_layers = torch.nn.ModuleList(post_module_list)
-        self.output_layer = EnsembleLinear(hidden_features, 2 * (obs_dim + self.with_reward), ensemble_size)
-
+                module_list.append(EnsembleLinear(hidden_features, hidden_features, ensemble_size))
+        self.backbones = torch.nn.ModuleList(module_list)
         
-        self.obs_mean = None
-        self.obs_std = None
-        self.register_parameter('max_logstd', torch.nn.Parameter(torch.ones(obs_dim + self.with_reward) * 1, requires_grad=True))
-        self.register_parameter('min_logstd', torch.nn.Parameter(torch.ones(obs_dim + self.with_reward) * -5, requires_grad=True))
+        self.mu_layer = EnsembleLinear(hidden_features, obs_dim + self.with_reward, ensemble_size)
+        self.alpha_layer = EnsembleLinear(hidden_features, obs_dim + self.with_reward, ensemble_size)
+        self.beta_layer = EnsembleLinear(hidden_features, obs_dim + self.with_reward, ensemble_size)
 
+        # self.trans = translatedSigmoid()
+    
     def update_self(self, obs):
         self.obs_mean = obs.mean(dim=0)
         self.obs_std = obs.std(dim=0)
 
-    def forward(self, obs_action, next_obs=None, get_sample=False):
-        # Normalization for obs. If 'normaliza', no residual. 
-        # use 'dims' to make forward work both when training and evaluating
+    def forward(self, obs_action, eval=True):
         dims = len(obs_action.shape) - 2
         if self.obs_mean is not None:
             if dims:
@@ -184,23 +268,17 @@ class GMM_EnsembleTransition(torch.nn.Module):
             output = obs_action
         for layer in self.backbones:
             output = self.activation(layer(output))
+        
+        mu = self.mu_layer(output)
+        alpha = F.softplus(self.alpha_layer(output))
+        beta = F.softplus(self.beta_layer(output))
+        gamma_dist = Gamma(alpha+1e-8, 1.0/(beta+1e-8))
+        if eval:
+            samples_var = gamma_dist.rsample([100])
+        else:
+            samples_var = gamma_dist.rsample([self.num_draws_train])
 
-        # num_dynamics, bs, dim
-        num_dynamics = len(self.transition.output_layer.select)
-        # (num_dynamics, bs, (obs_dim, r_dim) * num_classes) 
-        logits = self.output_layer(output).reshape(num_dynamics, -1, self.num_category, self.num_classes)
-        
-        dist = torch.distributions.OneHotCategorical(logits)
-        # (num_dynamics, bs, num_category, num_classes)
-        embed = dist.sample()
-        output = embed.reshape(num_dynamics, -1, self.num_category * self.num_classes) 
-        
-        for layer in self.post_layers:
-            output = self.activation(layer(output))
-        
-        mu, logstd = torch.chunk(self.output_layer(output), 2, dim=-1)
-        logstd = soft_clamp(logstd, self.min_logstd, self.max_logstd)
-        # 'local': with residual
+        var = 1.0 / (samples_var + 1e-8)
         if self.mode == 'local' or self.mode == 'normalize':
             if self.with_reward:
                 obs, reward = torch.split(mu, [self.obs_dim, 1], dim=-1)
@@ -208,53 +286,33 @@ class GMM_EnsembleTransition(torch.nn.Module):
                 mu = torch.cat([obs, reward], dim=-1)
             else:
                 mu = mu + obs_action[..., :self.obs_dim]
-        if get_sample:
-            # (num_dynamics, bs, dim)
-            samples = torch.distributions.Normal(mu, torch.exp(logstd)).sample()
-            
-
-            return samples, 
-            # samples, samples_prob, next_obs_prob
-
-    def get_prob(self, samples, category_dist, mu, logstd):
-        if self.z_vector is None:
-            from itertools import product
-            self.z_vector = torch.tensor([roll for roll in product(range(self.num_classes), repeat=self.num_category)])
-            self.z_vector = torch.nn.functional.one_hot(self.z_vector, num_classes=self.num_classes).to(obs.device)
-    
-        # num_case, embed_dim
-        output = self.z_vector.reshape(-1, self.num_category * self.num_classes)
-        for layer in self.post_layers:
-            output = self.activation(layer(output))
         
-        mu, logstd = torch.chunk(self.output_layer(output), 2, dim=-1)
-        logstd = soft_clamp(logstd, self.min_logstd, self.max_logstd)
-        # 'local': with residual
-        if self.mode == 'local' or self.mode == 'normalize':
-            if self.with_reward:
-                obs, reward = torch.split(mu, [self.obs_dim, 1], dim=-1)
-                obs = obs + obs_action[..., :self.obs_dim]
-                mu = torch.cat([obs, reward], dim=-1)
-            else:
-                mu = mu + obs_action[..., :self.obs_dim]
-        # num_category * num_classes, dim
-        std = torch.exp(logstd)
-        dist = torch.distributions.Normal(mu, torch.exp(logstd))
-        # num_category * num_classes, bs
-        log_probs = torch.stack([torch.distributions.Normal(mu[index], std[index]).log_prob(obs).sum(-1) for index in range(self.num_category * self.num_classes)]) # 
-        
-        # get z
-        # (num_dynamics, bs, num_category, num_classes) , (num_cases, num_category, num_classes)
-        z_probs = category_dist.log_prob(self.z_vector) # (num_dyancmis, )
-        # (num_dynamics, bs)
-        probs = (z_probs * torch.exp(log_probs).transpose(0, 1)).sum(-1)
+        return mu, var
+
+    def t_log_likelihood(self, x, y, eval=False):
+        # (num_dynamics, bs, dim) or (num_draws_train, num_dynamics, bs, dim)
+        if eval:
+            with torch.no_grad():
+                mu, var = self.forward(x, eval=eval)
+        else:
+            mu, var = self.forward(x, eval=eval)
+
+        c = -0.5 * np.log(2 * torch.pi) 
+        likelihood = c + torch.log(var) / 2 - (y - mu) ** 2 / (2*var)        
+
+        max = torch.max(likelihood, dim=0)[0]
+        return (likelihood - max).exp().mean(dim=0).log() + max
 
     def set_select(self, indexes):
         for layer in self.backbones:
             layer.set_select(indexes)
-        self.output_layer.set_select(indexes)
-
+        self.mu_layer.set_select(indexes)
+        self.alpha_layer.set_select(indexes)
+        self.beta_layer.set_select(indexes)
     def update_save(self, indexes):
         for layer in self.backbones:
             layer.update_save(indexes)
-        self.output_layer.update_save(indexes)
+        self.mu_layer.update_save(indexes)
+        self.alpha_layer.update_save(indexes)
+        self.beta_layer.update_save(indexes)
+        

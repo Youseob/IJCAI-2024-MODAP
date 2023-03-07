@@ -16,7 +16,7 @@ import offlinerl.utils.loader as loader
 from offlinerl.utils.net.terminal_check import is_terminal
 
 from offlinerl.utils.data import ModelBuffer
-from offlinerl.utils.net.model.ensemble import EnsembleTransition
+from offlinerl.utils.net.model.ensemble import EnsembleTransition, RecalibrationLayer
 from offlinerl.utils.net.maple_actor import Maple_actor
 from offlinerl.utils.net.model.maple_critic import Maple_critic
 from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
@@ -44,7 +44,7 @@ def algo_init(args):
     transition = EnsembleTransition(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
                                     args['transition_init_num'], mode=args['mode']).to(args['device'])
     transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
-
+    
     task_dist = MLP(obs_shape, args["transition_select_num"], hidden_features=args["hidden_layer_size"], hidden_layers=args["hidden_layers"]).to(args['device'])
 
     task_optim = torch.optim.Adam(task_dist.parameters(), lr=args["b_lr"])
@@ -124,8 +124,22 @@ class AlgoTrainer(BaseAlgo):
         if self.args['only_dynamics']:
             return
         self.transition.requires_grad_(False)
+        self.recalibrator = None
+        if self.args["calibration"]:
+            # self.args["obs_shape"] + with_reward
+            self.recalibrator = RecalibrationLayer(self.args['obs_shape'] + 1, len(self.transition.output_layer.select)).to(self.device)
+            self.calibrate_optim = torch.optim.AdamW(self.recalibrator.parameters(), lr=1e-3)
+            data_size = len(train_buffer)
+            val_size = min(int(data_size * 0.2) + 1, 1000)
+            train_size = data_size - val_size
+            _, val_splits = torch.utils.data.random_split(range(data_size), (train_size, val_size))
+            valdata = train_buffer[val_splits.indices]
+            valdata.to_torch(device=self.device)
+            dist = self.transition(torch.cat([valdata['obs'], valdata['act']], dim=-1))
+            self.recalibrator.calibrate(torch.cat([valdata['obs_next'], valdata["rew"]], dim=-1), self.calibrate_optim, pred_dist=dist)
+
+
         ###################################################################################################################
-        
         env_pool_size = int((train_buffer.shape[0]/self.args['horizon']) * 1.2)
         self.env_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
                                              self.args['transition_select_num'], env_pool_size)
@@ -134,7 +148,7 @@ class AlgoTrainer(BaseAlgo):
 
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
                                  maxlen=self.args['horizon'], policy_hook=None,\
-                                 value_hook=None, model_hook=self.transition,\
+                                 value_hook=None, model_hook=self.transition, calibrator=self.recalibrator, \
                                  belief_update_mode=self.args["belief_update_mode"], temp=self.args["temp"], \
                                  device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
         torch.cuda.empty_cache()
@@ -152,7 +166,7 @@ class AlgoTrainer(BaseAlgo):
 
         for i in range(self.args['out_train_epoch']):
             # for _ in range(20000 // self.args["rollout_batch_size"]):
-            ret = self.rollout_model(self.args['rollout_batch_size'])
+            ret = self.rollout_model(self.args['rollout_batch_size'], epoch=i)
             
             torch.cuda.empty_cache()
 
@@ -253,7 +267,7 @@ class AlgoTrainer(BaseAlgo):
         self.transition.set_select(indexes)
         return self.transition
 
-    def rollout_model(self,rollout_batch_size, deterministic=False):
+    def rollout_model(self,rollout_batch_size, epoch, deterministic=False, ):
         
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
         num_dynamics = len(self.transition.output_layer.select)
@@ -272,14 +286,26 @@ class AlgoTrainer(BaseAlgo):
         adv_action = task_dist.sample()
         model_indexes = adv_action.cpu().numpy()
         mdp_values = torch.zeros(rollout_batch_size).float().to(self.device)
-        reg = task_dist.log_prob(adv_action) - Categorical(belief).log_prob(adv_action)
+        true_dist = Categorical(belief)
+        # reg = task_dist.log_prob(adv_action) - Categorical(belief).log_prob(adv_action)
         with torch.no_grad():
             for h in range(self.args['horizon']):
                 act = self.get_meta_action(obs, belief, deterministic)
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)
                 next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
-                log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
+                
+                if self.recalibrator is not None:
+                    # num_dynamics, rollout_batch_size, obs_dim
+                    #[es*(es, bs)]
+                    # es, es, bs
+                    log_probs = torch.stack([self.recalibrator.calibrated_prob(next_obses, \
+                                                            mu=next_obs_dists.mean[index], \
+                                                            std=next_obs_dists.scale[index], \
+                                                            ).log().sum(-1) for index in range(num_dynamics)])
+                
+                else:
+                    log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
                 # log_probs = next_obs_dists.log_prob(next_obses[None, ...].repeat(num_dynamics, 1, 1, 1)).sum(-1) # (num_dynamics, num_dynamics, rollout_batch_size)
                 rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
                 next_obses = next_obses[:, :, :-1]
@@ -314,6 +340,7 @@ class AlgoTrainer(BaseAlgo):
                 obs = next_obs
                 belief = next_belief
             
+            overconfi_percent = (belief.max(-1)[0] > 0.99).sum() / rollout_batch_size 
             self.model_pool._pointer += num_samples
             self.model_pool._pointer %= self.model_pool._max_size
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
@@ -328,14 +355,17 @@ class AlgoTrainer(BaseAlgo):
             
         # belief_net update
         mdp_values *= -self.args["reward_scale"]
-        mdp_values += reg
+        kl = torch.distributions.kl_divergence(true_dist, task_dist)
         probs = torch.softmax(logits, dim=-1)[np.arange(obs.shape[0]), model_indexes]
 
-        loss = (-probs.log() * mdp_values).mean()
+        loss = (-probs.log() * mdp_values + kl).mean()
         self.task_dist_optim.zero_grad()
         loss.backward()
         self.task_dist_optim.step()
-        return {"adv_return": -mdp_values.mean().item(), "adv_loss" : loss.item()}
+        return {"overconf_percent" : overconfi_percent, \
+                "adv_return": mdp_values.mean().item(), \
+                "b_kl" : kl.mean().item(), \
+                "adv_loss" : loss.item()}
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -505,7 +535,11 @@ class AlgoTrainer(BaseAlgo):
             obs_action = torch.cat([state, action], dim=-1) # bs, dim
             next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
             next_obses = torch.cat([next_state, reward], dim=-1) # bs, dim
-            log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
+            if self.recalibrator is None:
+                log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
+            else:
+                log_prob = self.recalibrator.calibrated_prob(next_obses, pred_dist=next_obs_dists).log().sum(-1)
+            
             log_prob = torch.clamp(log_prob, -20., 5.)
             
         if self.args["belief_update_mode"] == 'kl-reg':

@@ -51,8 +51,8 @@ class RecalibrationLayer(torch.nn.Module):
         self.register_parameter('weight', torch.nn.Parameter(torch.zeros(ensemble_size, 1, out_features)))
         self.register_parameter('bias', torch.nn.Parameter(torch.zeros(ensemble_size, 1, out_features)))
 
-        torch.nn.init.trunc_normal_(self.weight, std=1/(2*out_features**0.5))
-        torch.nn.init.trunc_normal_(self.bias, std=1/(2*out_features**0.5))
+        torch.nn.init.uniform_(self.weight)
+        torch.nn.init.uniform_(self.bias)
 
         self.register_parameter('saved_weight', torch.nn.Parameter(self.weight.detach().clone()))
         self.register_parameter('saved_bias', torch.nn.Parameter(self.bias.detach().clone()))
@@ -77,10 +77,11 @@ class RecalibrationLayer(torch.nn.Module):
         log_prob = pred_dist.log_prob(y)
         
         cdf_pred = pred_dist.cdf(y)
-        # R'(cdf(x))
-        pdf_cal = torch.sigmoid(cdf_pred) * (1 - torch.sigmoid(cdf_pred)) * self.weight
+        # R'(cdf(x)) -> sig(cal_pre) (1 - sig(cal_pre))
+        cdf_cal = self.forward(cdf_pred)
+        pdf_cal = torch.sigmoid(cdf_cal) * (1 - torch.sigmoid(cdf_cal)) * self.weight
         pdf_cal *= log_prob.exp()
-        return pdf_cal
+        return pdf_cal + 1e-5
     
     def calibrate(self, y, optim, mu=None, std=None, pred_dist=None):
         if pred_dist is None:
@@ -100,7 +101,7 @@ class RecalibrationLayer(torch.nn.Module):
             train_x[..., d] = cdf
             train_y[..., d] = target.T
         
-        batch_size = 32
+        batch_size = 64
         idxs = np.random.randint(y.shape[0], size=y.shape[0])
         for epoch in range(1000):
             for batch_num in range(int(np.ceil(idxs.shape[-1] / batch_size))):
@@ -115,10 +116,11 @@ class RecalibrationLayer(torch.nn.Module):
                 optim.step()
             if epoch % 100 == 0:
                 print(loss.item())
-                
+                # es, bs, dim
+                pre_nll = -pred_dist.log_prob(y).sum(-1).mean(-1)
+                print(pre_nll.mean())
                 nll = -torch.log(self.calibrated_prob(y, pred_dist=pred_dist)).sum(-1).mean(-1)
-                print(nll)
-
+                print(nll.mean())
         
     def set_select(self, indexes):
         assert len(indexes) <= self.ensemble_size and max(indexes) < self.ensemble_size

@@ -320,7 +320,8 @@ class AlgoTrainer(BaseAlgo):
                                                             ).log().sum(-1) for index in range(num_dynamics)])
                      
                     
-                log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
+                else:
+                    log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
                 # log_probs = next_obs_dists.log_prob(next_obses[None, ...].repeat(num_dynamics, 1, 1, 1)).sum(-1) # (num_dynamics, num_dynamics, rollout_batch_size)
                 rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
                 next_obses = next_obses[:, :, :-1]
@@ -560,7 +561,13 @@ class AlgoTrainer(BaseAlgo):
             next_obses = torch.cat([next_state, reward], dim=-1) # bs, dim
             log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
             log_prob = torch.clamp(log_prob, -20., 5.)
-            
+
+        log_probs = torch.stack([self.recalibrator.calibrated_prob(next_obses, \
+                                        mu=next_obs_dists.mean[index], \
+                                        std=next_obs_dists.scale[index], \
+                                        ).log().sum(-1) for index in range(num_dynamics)])
+    
+
         if self.args["belief_update_mode"] == 'kl-reg':
             next_belief = belief * torch.exp(log_prob/self.args['temp']).T # bs, num_dynamics
             return 

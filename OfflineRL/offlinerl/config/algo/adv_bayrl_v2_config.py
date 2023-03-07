@@ -60,9 +60,11 @@ soft_target_tau = 5e-3
 
 horizon = 10
 # vessl exp 2022/03/06
+calibration = True
 add_value_to_rt = True
 reward_scale = 0.1
-b_lr = 1e-3
+b_lr = 1e-4
+# b_update_epoch = 5
 belief_update_mode = 'bay' # 'bay', 'softmax', 'kl-reg'
 temp = 10 
 

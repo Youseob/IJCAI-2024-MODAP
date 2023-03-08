@@ -78,7 +78,7 @@ class AlgoTrainer(BaseAlgo):
         wandb.init(
             config=self.args,
             project=self.args["task"], # "d4rl-halfcheetah-medium-v2"
-            group=self.args["algo_name"], # "maple"
+            group="20230307", #self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
         )
@@ -340,7 +340,7 @@ class AlgoTrainer(BaseAlgo):
                 obs = next_obs
                 belief = next_belief
             
-            overconfi_percent = (belief.max(-1)[0] > 0.99).sum() / rollout_batch_size 
+            overconfi_percent = (belief.max(-1)[0] > 0.9).sum() / rollout_batch_size 
             self.model_pool._pointer += num_samples
             self.model_pool._pointer %= self.model_pool._max_size
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)

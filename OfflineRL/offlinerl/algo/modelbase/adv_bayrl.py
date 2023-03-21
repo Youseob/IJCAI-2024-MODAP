@@ -162,11 +162,12 @@ class AlgoTrainer(BaseAlgo):
                 train_loss[k] = train_loss[k]/self.args['in_train_epoch']
             
             # evaluate in mujoco
-            if i % 5 == 0:
+            if (i % 5 == 0) and (i > 3000):
                 eval_loss = self.eval_policy()
                 train_loss.update(eval_loss)
-                torch.cuda.empty_cache()
-                self.log_res(i//5, train_loss)
+            
+            torch.cuda.empty_cache()
+            self.log_res(i//5, train_loss)
             # self.prior_reg = min(self.args[])
 
 

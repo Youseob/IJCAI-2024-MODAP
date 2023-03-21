@@ -16,7 +16,7 @@ import offlinerl.utils.loader as loader
 from offlinerl.utils.net.terminal_check import is_terminal
 
 from offlinerl.utils.data import ModelBuffer
-from offlinerl.utils.net.model.ensemble import EnsembleTransition
+from offlinerl.utils.net.model.ensemble import EnsembleTransition, RecalibrationLayer
 from offlinerl.utils.net.maple_actor import Maple_actor
 from offlinerl.utils.net.model.maple_critic import Maple_critic
 from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
@@ -44,7 +44,10 @@ def algo_init(args):
     transition = EnsembleTransition(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
                                     args['transition_init_num'], mode=args['mode']).to(args['device'])
     transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
+    
+    task_dist = MLP(obs_shape, args["transition_select_num"], hidden_features=args["hidden_layer_size"], hidden_layers=args["hidden_layers"]).to(args['device'])
 
+    task_optim = torch.optim.Adam(task_dist.parameters(), lr=args["b_lr"])
 
     # lstm_hidden_unit: dim(belief_vector)0
     ###################################################
@@ -64,6 +67,7 @@ def algo_init(args):
         "actor": {"net": actor, "opt": actor_optim},
         "log_alpha": {"net": log_alpha, "opt": alpha_optimizer},
         "critic": {"net": [q1, q2], "opt": critic_optim},
+        "task_dist": {"net" : task_dist, "opt" : task_optim}
     }
 
 
@@ -73,8 +77,8 @@ class AlgoTrainer(BaseAlgo):
         self.args = args        
         wandb.init(
             config=self.args,
-            project=self.args["task"], # "d4rl-halfcheetah-medium-v2"
-            group=self.args["algo_name"], # "maple"
+            project='230321'+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            group="calib-bay", #self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
         )
@@ -93,6 +97,9 @@ class AlgoTrainer(BaseAlgo):
         self.target_q2 = deepcopy(self.q2)
         self.critic_optim = algo_init['critic']['opt']
 
+        self.task_dist = algo_init["task_dist"]["net"]
+        self.task_dist_optim = algo_init["task_dist"]["opt"]
+
         self.device = args['device']
         self.obs_space = args['obs_space']
         self.action_space = args['action_space']
@@ -100,19 +107,39 @@ class AlgoTrainer(BaseAlgo):
         self.args['buffer_size'] = int(self.args['data_collection_per_epoch']) * self.args['horizon'] * 5
         self.args['target_entropy'] = - self.args['action_shape']
         self.args['model_pool_size'] = int(args['model_pool_size'])
+        
+        print(f"[ DEBUG ] exp_name {self.args['exp_name']}")
+
 
     def train(self, train_buffer, val_buffer, callback_fn):
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
         if self.args['dynamics_path'] is not None:
-            self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
+            ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
+            self.transition = ckpt["model"].to(self.device)
+            # self.transition_optim = ckpt["optim"]
+            print("[ DEBUG ] load state dict model done")
         else:
             self.train_transition(train_buffer)
             if self.args['dynamics_save_path'] is not None: torch.save(self.transition, self.args['dynamics_save_path'])
         if self.args['only_dynamics']:
             return
         self.transition.requires_grad_(False)
+        self.recalibrator = None
+        if self.args["calibration"]:
+            # self.args["obs_shape"] + with_reward
+            self.recalibrator = RecalibrationLayer(self.args['obs_shape'] + 1, len(self.transition.output_layer.select)).to(self.device)
+            self.calibrate_optim = torch.optim.AdamW(self.recalibrator.parameters(), lr=1e-3)
+            data_size = len(train_buffer)
+            val_size = min(int(data_size * 0.2) + 1, 1000)
+            train_size = data_size - val_size
+            _, val_splits = torch.utils.data.random_split(range(data_size), (train_size, val_size))
+            valdata = train_buffer[val_splits.indices]
+            valdata.to_torch(device=self.device)
+            dist = self.transition(torch.cat([valdata['obs'], valdata['act']], dim=-1))
+            self.recalibrator.calibrate(torch.cat([valdata['obs_next'], valdata["rew"]], dim=-1), self.calibrate_optim, pred_dist=dist)
+
+
         ###################################################################################################################
-        
         env_pool_size = int((train_buffer.shape[0]/self.args['horizon']) * 1.2)
         self.env_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
                                              self.args['transition_select_num'], env_pool_size)
@@ -121,9 +148,9 @@ class AlgoTrainer(BaseAlgo):
 
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
                                  maxlen=self.args['horizon'], policy_hook=None,\
-                                 value_hook=None, model_hook=self.transition,\
-                                 soft_belief_update=self.args["soft_belief_update"],\
-                                 temp=self.args["soft_belief_temp"], device=self.device)
+                                 value_hook=None, model_hook=self.transition, calibrator=self.recalibrator, \
+                                 belief_update_mode=self.args["belief_update_mode"], temp=self.args["temp"], \
+                                 device=self.device, traj_num_to_infer=self.args["traj_num_to_infer"])
         torch.cuda.empty_cache()
         self.obs_max = train_buffer['obs'].max(axis=0)
         self.obs_min = train_buffer['obs'].min(axis=0)
@@ -133,22 +160,20 @@ class AlgoTrainer(BaseAlgo):
         self.obs_min -= soft_expanding
         self.obs_max = np.maximum(self.obs_max, 100)
         self.obs_min = np.minimum(self.obs_min, -100)
-
         self.rew_max = train_buffer['rew'].max()
-        self.rew_min = train_buffer['rew'].min()
+        self.rew_min = train_buffer['rew'].min() 
+        
 
         for i in range(self.args['out_train_epoch']):
-            
             self.model_pool._pointer = 0
             self.model_pool._size = 0
             for _ in range(3):
-                self.rollout_model(self.args['rollout_batch_size'])
+                ret = self.rollout_model(self.args['rollout_batch_size'], epoch=i)
+            
             torch.cuda.empty_cache()
             train_loss = {}
             train_loss['policy_loss'] = 0
             train_loss['q_loss'] = 0
-            # train_loss['uncertainty_mean'] = uncertainty_mean
-            # train_loss['uncertainty_max'] = uncertainty_max
             for j in range(self.args['in_train_epoch']):
                 batch = self.get_train_policy_batch(self.args['train_batch_size'])
                 in_res = self.train_policy(batch)
@@ -158,13 +183,14 @@ class AlgoTrainer(BaseAlgo):
                 train_loss[k] = train_loss[k]/self.args['in_train_epoch']
             
             # evaluate in mujoco
-            eval_loss = self.eval_policy()
-            # if i % 100 == 0 or i == self.args['out_train_epoch'] - 1:
-            #     self.eval_one_trajectory()
-            train_loss.update(eval_loss)
+            if i % 5 == 0:
+                if i > 3000:
+                    eval_loss = self.eval_policy()
+                    train_loss.update(eval_loss)
+                train_loss.update(ret)
+                self.log_res(i//5, train_loss)
+            
             torch.cuda.empty_cache()
-            self.log_res(i, train_loss)
-
 
     def get_train_policy_batch(self, batch_size = None):
         batch_size = batch_size or self.args['train_batch_size']
@@ -188,6 +214,8 @@ class AlgoTrainer(BaseAlgo):
         return self.policy_gru , self.actor
 
     def get_meta_action(self, state, belief ,deterministic=False, out_mean_std=False):
+        if deterministic:
+            return self.actor(belief, state, deterministic=True)
 
         mu_res, action_res, log_p_res, std_res = self.actor(belief, state)
         # action_res = torch.squeeze(action_res, dim=1)
@@ -196,9 +224,6 @@ class AlgoTrainer(BaseAlgo):
 
         if out_mean_std:
             return mu_res, action_res, std_res
-
-        if deterministic:
-            return mu_res
         else:
             return action_res
 
@@ -245,92 +270,105 @@ class AlgoTrainer(BaseAlgo):
         self.transition.set_select(indexes)
         return self.transition
 
-    @torch.no_grad()
-    def rollout_model(self,rollout_batch_size, deterministic=False):
+    def rollout_model(self,rollout_batch_size, epoch, deterministic=False, ):
+        
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
         num_dynamics = len(self.transition.output_layer.select)
+        obs = torch.from_numpy(batch['observations']).to(self.device)
+        belief = torch.from_numpy(batch["policy_hidden"]).float().to(self.device)
         obs_max = torch.tensor(self.obs_max).to(self.device)
         obs_min = torch.tensor(self.obs_min).to(self.device)
         rew_max = self.rew_max
         rew_min = self.rew_min
+        current_nonterm = np.ones((len(obs)), dtype=bool)
+        samples = None
 
-        sum_reward = np.zeros((rollout_batch_size, self.args['N'], 1))
-
-        _obs = torch.zeros(rollout_batch_size, self.args['N'], self.args['horizon'], self.obs_space.shape[0]).float().to(self.device)
-        _next_obs = torch.zeros(rollout_batch_size, self.args['N'], self.args['horizon'], self.obs_space.shape[0]).float().to(self.device)
-        _act = torch.zeros(rollout_batch_size, self.args['N'], self.args["horizon"], self.action_space.shape[0]).float().to(self.device)
-        _reward = torch.zeros(rollout_batch_size, self.args['N'], self.args["horizon"], 1).float().to(self.device)
-        _valid = np.zeros((rollout_batch_size, self.args['N'], self.args["horizon"], 1))
-        _term = np.zeros((rollout_batch_size, self.args['N'], self.args["horizon"], 1))
-        _value_hidden = torch.zeros(rollout_batch_size, self.args['N'], self.args["horizon"], num_dynamics).float().to(self.device)
-        _policy_hidden = torch.zeros(rollout_batch_size, self.args['N'], self.args["horizon"], num_dynamics).float().to(self.device)
-        
-        for n in range(self.args['N']):
-            model_indexes = None
-            obs = torch.from_numpy(batch['observations']).to(self.device)
-            belief = torch.from_numpy(batch["policy_hidden"]).to(self.device)
-            current_nonterm = np.ones((len(obs)), dtype=bool)
-            for i in range(self.args['horizon']):
+        #######################################
+        logits = self.task_dist(obs)
+        task_dist = Categorical(logits=logits)
+        adv_action = task_dist.sample()
+        model_indexes = adv_action.cpu().numpy()
+        mdp_values = torch.zeros(rollout_batch_size).float().to(self.device)
+        true_dist = Categorical(belief)
+        # reg = task_dist.log_prob(adv_action) - Categorical(belief).log_prob(adv_action)
+        with torch.no_grad():
+            for h in range(self.args['horizon']):
                 act = self.get_meta_action(obs, belief, deterministic)
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)
                 next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
-                log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
+                
+                if self.recalibrator is not None:
+                    # num_dynamics, rollout_batch_size, obs_dim
+                    #[es*(es, bs)]
+                    # es, es, bs
+                    log_probs = torch.stack([self.recalibrator.calibrated_prob(next_obses, \
+                                                            mu=next_obs_dists.mean[index], \
+                                                            std=next_obs_dists.scale[index], \
+                                                            ).log().sum(-1) for index in range(num_dynamics)])
+                
+                else:
+                    log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
                 # log_probs = next_obs_dists.log_prob(next_obses[None, ...].repeat(num_dynamics, 1, 1, 1)).sum(-1) # (num_dynamics, num_dynamics, rollout_batch_size)
                 rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
                 next_obses = next_obses[:, :, :-1]
-                if model_indexes is None:
-                    model_indexes = Categorical(belief).sample().cpu().numpy()
+
                 next_obs = next_obses[model_indexes, np.arange(obs.shape[0])] # 50000, obs_dim
                 reward = rewards[model_indexes, np.arange(obs.shape[0])]
                 log_prob = torch.stack([log_probs[index][model_indexes, np.arange(obs.shape[0])] for index in range(num_dynamics)]) # num_dynamics, 500000
+
                 term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
                 next_obs = torch.clamp(next_obs, obs_min, obs_max)
                 reward = torch.clamp(reward, rew_min, rew_max)
                 log_prob = torch.clamp(log_prob, -20, 5.)
                 next_belief = self.belief_update(belief, log_prob=log_prob)
 
-                sum_reward[:, n] += (self.args["discount"]**i) * reward.cpu().numpy() * current_nonterm.reshape(-1, 1)
+                mdp_values += (self.args["discount"]**h) * reward.squeeze(-1) * torch.from_numpy(current_nonterm).to(self.device)
+                ##
                 nonterm_mask = ~term.squeeze(-1)
-                _obs[:, n, i] = obs
-                _next_obs[:, n, i] = next_obs
-                _act[:, n, i] = act                
-                _reward[:, n, i] = reward
-                _term[:, n , i] = term
-                _policy_hidden[:, n, i] = belief
-                _value_hidden[:, n, i] = next_belief
-                _valid[:, n, i] = current_nonterm.reshape(-1, 1)
-                _term[:, n, i] = term
-
+                #nonterm_mask: 1-not done, 0-done
+                samples = {'observations': obs.cpu().numpy(), 'actions': act.cpu().numpy(), 'next_observations': next_obs.cpu().numpy(),
+                            'rewards': reward.cpu().numpy(), 'terminals': term,
+                            'valid': current_nonterm.reshape(-1, 1),
+                            'value_hidden': next_belief.cpu().numpy(), 'policy_hidden': belief.cpu().numpy()} 
+                
+                samples = {k: np.expand_dims(v, 1) for k, v in samples.items()}
+                num_samples = samples['observations'].shape[0]
+                index = np.arange(
+                    self.model_pool._pointer, self.model_pool._pointer + num_samples) % self.model_pool._max_size
+                for k in samples:
+                    self.model_pool.fields[k][index, h] = samples[k][:, 0]
+                
                 current_nonterm = current_nonterm & nonterm_mask
                 obs = next_obs
                 belief = next_belief
-        
-            _, sampled_act, log_prob_act, _ = self.actor(belief, obs)
-            value1 = self.target_q1(belief, sampled_act, obs)
-            value2 = self.target_q2(belief, sampled_act, obs)
-            value = torch.min(value1, value2) - torch.exp(self.log_alpha) * log_prob_act.unsqueeze(-1)
-            sum_reward[:, n] += (self.args['discount']**(self.args['horizon'])) * current_nonterm.reshape(-1, 1) * value.cpu().numpy()
-        
-        worst_num_traj = int(self.args['N'] * self.args["worst_percentil"])
-        worst_x_ind = np.arange(rollout_batch_size).repeat(worst_num_traj)
-        worst_y_in = np.argsort(sum_reward, axis=1)[:, :worst_num_traj, :].reshape(-1) # rollout_batch_size, N*portion, 1
-        
-        num_samples = worst_num_traj * rollout_batch_size
-        index = np.arange(self.model_pool._pointer, self.model_pool._pointer + worst_num_traj * rollout_batch_size) % self.model_pool._max_size
-        self.model_pool.fields["observations"][b] = _obs[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
-        self.model_pool.fields["actions"][index] = _act[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
-        self.model_pool.fields["next_observations"][index] = _next_obs[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
-        self.model_pool.fields["rewards"][index] = _reward[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
-        self.model_pool.fields["terminals"][index] = _term[worst_x_ind, worst_y_in] # wort_num_traj, horizon, dim
-        self.model_pool.fields["valid"][index] = _valid[worst_x_ind, worst_y_in] # wort_num_traj, horizon, dim
-        self.model_pool.fields["value_hidden"][index] = _value_hidden[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
-        self.model_pool.fields["policy_hidden"][index] = _policy_hidden[worst_x_ind, worst_y_in].cpu().numpy() # wort_num_traj, horizon, dim
-        
-        self.model_pool._pointer += num_samples
-        self.model_pool._pointer %= self.model_pool._max_size
-        self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
-        return 
+            
+            overconfi_percent = (belief.max(-1)[0] > 0.9).sum() / rollout_batch_size 
+            self.model_pool._pointer += num_samples
+            self.model_pool._pointer %= self.model_pool._max_size
+            self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
+
+            if self.args["add_value_to_rt"]:
+                _, sampled_act, log_prob_act, _ = self.actor(belief, obs)
+                value1 = self.target_q1(belief, sampled_act, obs)
+                value2 = self.target_q2(belief, sampled_act, obs)
+                value = torch.min(value1, value2) - torch.exp(self.log_alpha) * log_prob_act.unsqueeze(-1)
+                # (num_dynamics)
+                mdp_values += (self.args['discount']**(self.args['horizon'])) * torch.from_numpy(current_nonterm).to(self.device) * value.squeeze(-1)
+            
+        # belief_net update
+        mdp_values *= -self.args["reward_scale"]
+        kl = torch.distributions.kl_divergence(true_dist, task_dist)
+        probs = torch.softmax(logits, dim=-1)[np.arange(obs.shape[0]), model_indexes]
+
+        loss = (-probs.log() * mdp_values + kl).mean()
+        self.task_dist_optim.zero_grad()
+        loss.backward()
+        self.task_dist_optim.step()
+        return {"overconf_percent" : overconfi_percent, \
+                "adv_return": mdp_values.mean().item(), \
+                "b_kl" : kl.mean().item(), \
+                "adv_loss" : loss.item()}
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -340,12 +378,6 @@ class AlgoTrainer(BaseAlgo):
             batch[k] = torch.from_numpy(batch[k][:,:max_len]).to(self.device)
         belief = batch['policy_hidden']
         next_belief = batch['value_hidden']
-        # value_state = self.value_gru(batch['observations'], batch['last_actions'],value_hidden,lens)
-        # policy_state = self.policy_gru(batch['observations'], batch['last_actions'], policy_hidden, lens)
-        # lens_next = torch.ones(len(lens)).int()
-
-        # value_state_next = torch.cat([value_state[:,1:],value_state_next],dim=1)
-        # policy_state_next = torch.cat([policy_state[:,1:],policy_state_next],dim=1)
 
         q1 = self.q1(belief,batch['actions'],batch['observations'])
         q2 = self.q2(belief,batch['actions'],batch['observations'])
@@ -381,6 +413,7 @@ class AlgoTrainer(BaseAlgo):
             # update alpha
             alpha_loss = - torch.sum(self.log_alpha * ((log_p_act_now+ \
                                                          self.args['target_entropy'])*batch['valid']).detach())/valid_num
+
             self.log_alpha_optim.zero_grad()
             alpha_loss.backward()
             self.log_alpha_optim.step()
@@ -438,14 +471,16 @@ class AlgoTrainer(BaseAlgo):
         res = self.test_on_real_env(self.args['number_runs_eval'], env)
         return res
 
+    @torch.no_grad()
     def test_on_real_env(self, number_runs, env):
         results = ([self.test_one_trail(env) for _ in range(number_runs)])
         rewards = [result[0] for result in results]
         episode_lengths = [result[1] for result in results]
-        belief_10th = [result[2] for result in results]
-        belief_49th = [result[3] for result in results]
-        belief_99th = [result[4] for result in results]
-        belief_last = [result[5] for result in results]
+        belief_0th = [result[2] for result in results]
+        belief_10th = [result[3] for result in results]
+        belief_49th = [result[4] for result in results]
+        belief_99th = [result[5] for result in results]
+        belief_last = [result[6] for result in results]
 
         rew_mean = np.mean(rewards)
         len_mean = np.mean(episode_lengths)
@@ -454,6 +489,7 @@ class AlgoTrainer(BaseAlgo):
         res["Reward_Mean_Env"] = rew_mean
         res["Eval_normalized_score"] = env.get_normalized_score(rew_mean)
         res["Length_Mean_Env"] = len_mean
+        res["0th_Belief_Max"] = np.mean(belief_0th)
         res["10th_Belief_Max"] = np.mean(belief_10th)
         res["49th_Belief_Max"] = np.mean(belief_49th)
         res["99th_Belief_Max"] = np.mean(belief_99th)
@@ -465,12 +501,13 @@ class AlgoTrainer(BaseAlgo):
         env = deepcopy(env)
         with torch.no_grad():
             state, done = env.reset(), False
-            belief = torch.ones((1,self.args['transition_select_num'])).to(self.device) / self.args['transition_select_num']
-            # hidden_policy = torch.zeros((1,1,self.args['lstm_hidden_unit'])).to(self.device)
+            # (1, num_dynamics)
+            belief = np.ones((1,self.args['transition_select_num'])) / self.args['transition_select_num']
             rewards = 0
             lengths = 0
-            state = state[np.newaxis]  
+            state = state[np.newaxis]
             state = torch.from_numpy(state).float().to(self.device)
+            belief = init_belief = self.get_adv_belief(state)
             belief_10th = belief_50th = belief_100th = belief_last = 1. / self.args['transition_select_num']
             while not done:
                 # hidden = (hidden_policy, lst_action)
@@ -492,21 +529,35 @@ class AlgoTrainer(BaseAlgo):
                     belief_100th = belief.max().item()
                 elif done:
                     belief_last = belief.max().item()
-        return (rewards, lengths, belief_10th, belief_50th, belief_100th, belief_last)
+        return (rewards, lengths, init_belief.max().item(), belief_10th, belief_50th, belief_100th, belief_last)
     
     @torch.no_grad()
     def belief_update(self, belief, state=None, action=None ,next_state=None, reward=None, log_prob=None):
+        # assert self.args["belief_update_mode"] in ['softmax', 'kl-reg', 'bay']
         if log_prob is None:
             obs_action = torch.cat([state, action], dim=-1) # bs, dim
             next_obs_dists = self.transition(obs_action) # bs, dim -> (num_dynamics, bs, dim)
             next_obses = torch.cat([next_state, reward], dim=-1) # bs, dim
-            log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
+            if self.recalibrator is None:
+                log_prob = next_obs_dists.log_prob(next_obses).sum(-1) # (num_dynamics, bs)
+            else:
+                log_prob = self.recalibrator.calibrated_prob(next_obses, pred_dist=next_obs_dists).log().sum(-1)
+            
             log_prob = torch.clamp(log_prob, -20., 5.)
             
-        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics        
-        if self.args["soft_belief_update"]:
-            temp = self.args["soft_belief_temp"]
-            return torch.softmax(next_belief / temp, dim=1)
+        if self.args["belief_update_mode"] == 'kl-reg':
+            next_belief = belief * torch.exp(log_prob/self.args['temp']).T # bs, num_dynamics
+            next_belief /= next_belief.sum(-1, keepdim=True)
+            return next_belief
         
+        next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics     
+        if self.args["belief_update_mode"] == 'softmax':
+            return torch.softmax(next_belief / self.args['temp'], dim=1)
+        
+        # 'bay"
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief
+
+    @torch.no_grad()
+    def get_adv_belief(self, obs):
+        return torch.softmax(self.task_dist(obs), dim=-1)

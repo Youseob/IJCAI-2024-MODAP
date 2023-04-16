@@ -572,9 +572,9 @@ class AlgoTrainer(BaseAlgo):
             mdp_values += (self.args['discount']**(self.args['horizon'])) * current_nonterm * value.squeeze(-1)
         # (bs, num_dynamics)
         adv_logits = prior_belief * torch.exp(-mdp_values.T / self.args["q_lambda"])
-        adv_logits = torch.clamp(adv_logtis, 1e-5)
-        # adv_belief /= adv_belief.sum(-1, keepdims=True)
+        adv_logits = torch.clamp(adv_logits, 1e-5)
         if return_values:
+            adv_belief /= adv_belief.sum(-1, keepdims=True)
             tvd = torch.abs(adv_belief - prior_belief).max(-1)[0]
             return adv_logits, mdp_values.max(), mdp_values.min(), tvd.min(), tvd.max(), tvd.mean()
         

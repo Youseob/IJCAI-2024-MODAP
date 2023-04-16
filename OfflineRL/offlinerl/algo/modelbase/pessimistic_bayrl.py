@@ -272,8 +272,8 @@ class AlgoTrainer(BaseAlgo):
             for h in range(self.args['horizon']):
                 act = self.get_meta_action(obs, belief, deterministic)
                 #######
-                adv_sampler = self.get_pessimistic_belief(obs, act, belief, return_values=False)
-                model_indexes = Categorical(adv_sampler).sample().cpu().numpy()
+                adv_logits = self.get_pessimistic_belief(obs, act, belief, return_values=False)
+                model_indexes = Categorical(logits=adv_logits).sample().cpu().numpy()
                 #######
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)
@@ -571,10 +571,11 @@ class AlgoTrainer(BaseAlgo):
             # (num_dynamics, bs)
             mdp_values += (self.args['discount']**(self.args['horizon'])) * current_nonterm * value.squeeze(-1)
         # (bs, num_dynamics)
-        adv_belief = prior_belief * torch.exp(-mdp_values.T / self.args["q_lambda"])
-        adv_belief /= adv_belief.sum(-1, keepdims=True)
+        adv_logits = prior_belief * torch.exp(-mdp_values.T / self.args["q_lambda"])
+        adv_logits = torch.clamp(adv_logtis, 1e-5)
+        # adv_belief /= adv_belief.sum(-1, keepdims=True)
         if return_values:
             tvd = torch.abs(adv_belief - prior_belief).max(-1)[0]
-            return adv_belief, mdp_values.max(), mdp_values.min(), tvd.min(), tvd.max(), tvd.mean()
+            return adv_logits, mdp_values.max(), mdp_values.min(), tvd.min(), tvd.max(), tvd.mean()
         
-        return adv_belief
+        return adv_logits

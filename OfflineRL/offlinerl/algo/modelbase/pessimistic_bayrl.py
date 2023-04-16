@@ -176,7 +176,7 @@ class AlgoTrainer(BaseAlgo):
                 train_loss.update(eval_loss)
                 train_loss.update(ret)
                 torch.cuda.empty_cache()
-                self.log_res(i//5, train_loss)
+                self.log_res(i//4, train_loss)
 
     def get_train_policy_batch(self, batch_size=None):
         batch_size = batch_size or self.args['train_batch_size']
@@ -571,10 +571,10 @@ class AlgoTrainer(BaseAlgo):
             # (num_dynamics, bs)
             mdp_values += (self.args['discount']**(self.args['horizon'])) * current_nonterm * value.squeeze(-1)
         # (bs, num_dynamics)
-        adv_belief = prior_belief *torch.exp(mdp_values.T / self.args["q_lambda"])
+        adv_belief = prior_belief * torch.exp(-mdp_values.T / self.args["q_lambda"])
         adv_belief /= adv_belief.sum(-1, keepdims=True)
-        tvd = torch.abs(adv_belief - prior_belief).max(-1)[0]
         if return_values:
+            tvd = torch.abs(adv_belief - prior_belief).max(-1)[0]
             return adv_belief, mdp_values.max(), mdp_values.min(), tvd.min(), tvd.max(), tvd.mean()
         
         return adv_belief

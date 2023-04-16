@@ -273,7 +273,10 @@ class AlgoTrainer(BaseAlgo):
                 act = self.get_meta_action(obs, belief, deterministic)
                 #######
                 adv_logits = self.get_pessimistic_belief(obs, act, belief, return_values=False)
-                model_indexes = Categorical(logits=adv_logits).sample().cpu().numpy()
+                try:
+                    model_indexes = Categorical(logits=adv_logits).sample().cpu().numpy()
+                except:
+                    import pdb; pdb.set_trace()
                 #######
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)

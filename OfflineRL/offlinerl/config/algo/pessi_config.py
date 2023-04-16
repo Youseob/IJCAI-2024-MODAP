@@ -64,7 +64,7 @@ calibration = True
 add_value_to_rt = True
 belief_update_mode = 'bay' # 'bay', 'softmax', 'kl-reg'
 q_lambda = 10
-# temp = 10 
+temp = None 
 
 #tune
 # params_tune = {

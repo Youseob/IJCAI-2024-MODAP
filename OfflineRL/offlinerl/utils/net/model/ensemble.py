@@ -59,29 +59,33 @@ class RecalibrationLayer(torch.nn.Module):
 
         self.select = list(range(0, self.ensemble_size))
 
-    def forward(self, x, activation=True):
-        weight = self.weight[self.select]
-        bias = self.bias[self.select]
-
+    def forward(self, x, activation=True, select=None):
+        if select:
+            weight = self.weight[select] # (1, dim)
+            bias = self.bias[select]
+        else:
+            weight = self.weight[self.select]
+            bias = self.bias[self.select]
         x = weight * x + bias
         if activation: return torch.sigmoid(x)
         return x
 
     @torch.no_grad()
-    def calibrated_prob(self, y, mu=None, std=None, pred_dist=None):
+    def calibrated_prob(self, y, mu=None, std=None, pred_dist=None, select=None):
         # R o CDF -> R'(cdf(x)) * pdf(x)
         if pred_dist is None:
             assert mu is not None and std is not None
             pred_dist = torch.distributions.Normal(mu, std)
-        # en, bs, dim
+        # en, bs, dim or bt, en, bs, dim
         log_prob = pred_dist.log_prob(y)
         
         cdf_pred = pred_dist.cdf(y)
         # R'(cdf(x)) -> sig(cal_pre) (1 - sig(cal_pre))
-        cdf_cal = self.forward(cdf_pred)
+        cdf_cal = self.forward(cdf_pred, select=select)
         pdf_cal = torch.sigmoid(cdf_cal) * (1 - torch.sigmoid(cdf_cal)) * self.weight
         pdf_cal *= log_prob.exp()
-        return pdf_cal + 1e-5
+        pdf_cal = torch.clamp(pdf_cal, 1e-5, 0.999)
+        return pdf_cal
     
     def calibrate(self, y, optim, mu=None, std=None, pred_dist=None):
         if pred_dist is None:

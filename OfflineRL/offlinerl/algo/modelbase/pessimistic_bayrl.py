@@ -171,7 +171,7 @@ class AlgoTrainer(BaseAlgo):
                 train_loss[k] = train_loss[k]/self.args['in_train_epoch']
             
             # evaluate in mujoco
-            if i % 5 == 0:
+            if i % 4 == 0:
                 eval_loss = self.eval_policy()
                 train_loss.update(eval_loss)
                 train_loss.update(ret)

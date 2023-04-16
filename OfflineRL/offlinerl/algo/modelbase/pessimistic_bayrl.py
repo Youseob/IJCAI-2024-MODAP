@@ -300,7 +300,7 @@ class AlgoTrainer(BaseAlgo):
                 term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
                 next_obs = torch.clamp(next_obs, obs_min, obs_max)
                 reward = torch.clamp(reward, rew_min, rew_max)
-                log_prob = torch.clamp(log_prob, -20, 0.)
+                log_prob = torch.clamp(log_prob, -20, 5.)
                 next_belief = self.belief_update(belief, log_prob=log_prob)
 
                 nonterm_mask = ~term.squeeze(-1)
@@ -551,7 +551,7 @@ class AlgoTrainer(BaseAlgo):
             term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obses.cpu().numpy(), self.args['task']) # num_dynamics, bs, 1
             next_obses = torch.clamp(next_obses, obs_min, obs_max)
             rewards = torch.clamp(rewards, rew_min, rew_max)
-            log_probs = torch.clamp(log_probs, -20, 0.) 
+            log_probs = torch.clamp(log_probs, -20, 5.) 
             
             if h == 0:
                 next_belief = belief[None, ...] * torch.exp(log_probs) # (rollout_in_each_dynamics, bs, belief_dim)

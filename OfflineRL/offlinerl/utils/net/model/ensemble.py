@@ -63,10 +63,11 @@ class RecalibrationLayer(torch.nn.Module):
         if select is not None:
             weight = self.weight[select] # (1, dim)
             bias = self.bias[select]
+            x = weight * x + bias
         else:
-            weight = self.weight[self.select]
-            bias = self.bias[self.select]
-        x = weight * x + bias
+            # weight = self.weight[self.select]
+            # bias = self.bias[self.select]
+            x = self.weight * x + bias
         if activation: return torch.sigmoid(x)
         return x
 

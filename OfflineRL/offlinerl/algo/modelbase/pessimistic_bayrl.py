@@ -386,7 +386,9 @@ class AlgoTrainer(BaseAlgo):
 
         res = {
             'policy_loss': policy_loss.cpu().detach().numpy(),
-            'q_loss': q_loss.cpu().detach().numpy()
+            'q_loss': q_loss.cpu().detach().numpy(),
+            'q_max' : min_q_.max().item(),
+            'q_min' : min_q_.min().item()
             }
 
         return res

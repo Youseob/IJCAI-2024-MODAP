@@ -60,7 +60,7 @@ class RecalibrationLayer(torch.nn.Module):
         self.select = list(range(0, self.ensemble_size))
 
     def forward(self, x, activation=True, select=None):
-        if select:
+        if select is not None:
             weight = self.weight[select] # (1, dim)
             bias = self.bias[select]
         else:
@@ -84,7 +84,7 @@ class RecalibrationLayer(torch.nn.Module):
         cdf_cal = self.forward(cdf_pred, select=select)
         pdf_cal = torch.sigmoid(cdf_cal) * (1 - torch.sigmoid(cdf_cal)) * self.weight
         pdf_cal *= log_prob.exp()
-        pdf_cal = torch.clamp(pdf_cal, 1e-5, 0.999)
+        pdf_cal = torch.clamp(pdf_cal, 1e-5)
         return pdf_cal
     
     def calibrate(self, y, optim, mu=None, std=None, pred_dist=None):

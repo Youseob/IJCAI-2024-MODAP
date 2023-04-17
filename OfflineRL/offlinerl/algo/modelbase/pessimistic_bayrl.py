@@ -160,7 +160,8 @@ class AlgoTrainer(BaseAlgo):
             torch.cuda.empty_cache()
 
             train_loss = {
-                'policy_loss': 0,'q_loss': 0,
+                'policy_loss': 0,'q_loss': 0,\
+                'q_min': 0, 'q_max': 0
                 }
             for j in range(self.args['in_train_epoch']):
                 batch = self.get_train_policy_batch(self.args['train_batch_size'])

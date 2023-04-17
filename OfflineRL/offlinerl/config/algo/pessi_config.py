@@ -23,7 +23,7 @@ rollout_batch_size = 10000
 traj_num_to_infer = 1000
 uniform_rollout = False
 
-out_train_epoch = 2000
+out_train_epoch = 1800
 in_train_epoch = 200
 
 train_batch_size = 256              # train policy num of trajectories

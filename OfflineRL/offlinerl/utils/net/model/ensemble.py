@@ -67,7 +67,7 @@ class RecalibrationLayer(torch.nn.Module):
         else:
             # weight = self.weight[self.select]
             # bias = self.bias[self.select]
-            x = self.weight * x + bias
+            x = self.weight * x + self.bias
         if activation: return torch.sigmoid(x)
         return x
 

@@ -522,7 +522,7 @@ class AlgoTrainer(BaseAlgo):
         # obs = torch.from_numpy(obs).float().to(self.device) # bs, dim
         # belief = torch.from_numpy(belief).float().to(self.device)
         current_nonterm = torch.ones((1, len(obs)), dtype=torch.bool).to(self.device) # bs, dim
-        for h in range(self.args['horizon']):
+        for h in range(self.args['horizon']+5):
             if h > 0:
                 act = self.get_meta_action(obs, belief, deterministic) # (bs, dim) or (num_dynamics, bs, dim)
             obs_action = torch.cat([obs,act], dim=-1) # (bs, dim) or (num_dynamics, bs, dim)
@@ -545,7 +545,7 @@ class AlgoTrainer(BaseAlgo):
                 log_probs = log_probs.transpose(1, 2) # (rollout_in_each_dynamics, bs, belief_dim)
             else:
                 mu = next_obs_dists.mean
-                std = next_obs_dists.loc
+                std = next_obs_dists.scale
                 log_probs = Normal(mu[None, ...].repeat(100, 1, 1, 1), std[None, ...].repeat(100, 1, 1, 1)).log_prob(next_obses)
                 log_probs = next_obs_dists.log_prob(next_obses)
             rewards = next_obses[:, :, -1:] # (num_dynamics, bs, 1)

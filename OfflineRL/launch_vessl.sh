@@ -10,7 +10,7 @@ belief_mode=bay
 horizon_step=5
 
 python examples/train_d4rl.py --algo_name=pessi_bayrl \
-                              --exp_name=adv-$lambda \
+                              --exp_name=adv-$lambda-add_value-$add_value \
                               --task=d4rl-$dataset-v2 \
                               --transition_init_num=110 \
                               --transition_select_num=$num_model \

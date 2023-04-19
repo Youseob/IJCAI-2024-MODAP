@@ -72,7 +72,7 @@ class AlgoTrainer(BaseAlgo):
         self.args = args        
         wandb.init(
             config=self.args,
-            project='417' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project='420' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -271,11 +271,11 @@ class AlgoTrainer(BaseAlgo):
         # samples = None
         with torch.no_grad():
             for h in range(self.args['horizon']):
-                act = self.get_meta_action(obs, belief, deterministic)
+                _, act, log_prob_act, _ = self.actor(belief, obs)
                 #######
-                adv_logits = self.get_pessimistic_belief(obs, act, belief, return_values=False)
+                adv_prob, max_value, min_value, tvd_min, tvd_max, tvd_mean = self.get_pessimistic_belief(obs, act, log_prob_act, belief, return_values=True)
                 try:
-                    model_indexes = Categorical(logits=adv_logits).sample().cpu().numpy()
+                    model_indexes = Categorical(adv_prob).sample().cpu().numpy()
                 except:
                     import pdb; pdb.set_trace()
                 #######
@@ -327,7 +327,12 @@ class AlgoTrainer(BaseAlgo):
             self.model_pool._pointer %= self.model_pool._max_size
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
 
-        return {"overconf_percent" : overconfi_percent}
+        return {"overconf_percent" : overconfi_percent, 
+                "mdp_value_max" : max_value, 
+                "mdp_value_min" : min_value, 
+                "tvd_min" : tvd_min, 
+                "tvd_max" : tvd_max, 
+                "tvd_mean" : tvd_mean }
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -385,12 +390,11 @@ class AlgoTrainer(BaseAlgo):
         policy_loss.backward()
         self.actor_optim.step()
 
-        res = {
-            'policy_loss': policy_loss.cpu().detach().numpy(),
-            'q_loss': q_loss.cpu().detach().numpy(),
-            'q_max' : min_q_.max().item(),
-            'q_min' : min_q_.min().item()
-            }
+        res = { 'policy_loss': policy_loss.cpu().detach().numpy(),
+                'q_loss': q_loss.cpu().detach().numpy(),
+                'q_max' : min_q_.max().item(),
+                'q_min' : min_q_.min().item()
+                }
 
         return res
 
@@ -512,7 +516,7 @@ class AlgoTrainer(BaseAlgo):
         return next_belief
 
     @torch.no_grad()
-    def get_pessimistic_belief(self, obs, act, belief, deterministic=True, return_values=True):
+    def get_pessimistic_belief(self, obs, act, log_prob_act, belief, deterministic=True, return_values=True):
         num_dynamics = len(self.transition.output_layer.select)
         obs_max = torch.tensor(self.obs_max).to(self.device)
         obs_min = torch.tensor(self.obs_min).to(self.device)
@@ -523,6 +527,11 @@ class AlgoTrainer(BaseAlgo):
         # obs = torch.from_numpy(obs).float().to(self.device) # bs, dim
         # belief = torch.from_numpy(belief).float().to(self.device)
         current_nonterm = torch.ones((1, len(obs)), dtype=torch.bool).to(self.device) # bs, dim
+
+        value1 = self.q1(prior_belief, act, obs)
+        value2 = self.q2(prior_belief, act, obs)
+        init_value = torch.min(value1, value2) - torch.exp(self.log_alpha) * log_prob_act.unsqueeze(-1)
+        
         for h in range(self.args['horizon']+5):
             if h > 0:
                 act = self.get_meta_action(obs, belief, deterministic) # (bs, dim) or (num_dynamics, bs, dim)
@@ -571,17 +580,19 @@ class AlgoTrainer(BaseAlgo):
         
         if self.args["add_value_to_rt"]:
             _, sampled_act, log_prob_act, _ = self.actor(belief, obs)
-            value1 = self.target_q1(belief, sampled_act, obs)
-            value2 = self.target_q2(belief, sampled_act, obs)
+            value1 = self.q1(belief, sampled_act, obs)
+            value2 = self.q2(belief, sampled_act, obs)
             value = torch.min(value1, value2) - torch.exp(self.log_alpha) * log_prob_act.unsqueeze(-1)
             # (num_dynamics, bs)
             mdp_values += (self.args['discount']**(self.args['horizon'])) * current_nonterm * value.squeeze(-1)
+            mdp_values -= init_value.squeeze(-1)
         # (bs, num_dynamics)
+        print(mdp_values.mean().item())
         adv_logits = prior_belief * torch.exp(-mdp_values.T / self.args["q_lambda"])
         adv_logits = torch.clamp(adv_logits, 1e-5)
         if return_values:
-            adv_belief /= adv_belief.sum(-1, keepdims=True)
-            tvd = torch.abs(adv_belief - prior_belief).max(-1)[0]
+            adv_logits /= adv_logits.sum(-1, keepdims=True)
+            tvd = torch.abs(adv_logits - prior_belief).max(-1)[0]
             return adv_logits, mdp_values.max(), mdp_values.min(), tvd.min(), tvd.max(), tvd.mean()
         
         return adv_logits

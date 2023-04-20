@@ -2,7 +2,6 @@
 # dataset=walker2d-random
 num_model=100
 # num_traj_infer=100
-add_value=True
 cal=True
 # r_scale=10
 belief_mode=bay

@@ -178,6 +178,7 @@ class AlgoTrainer(BaseAlgo):
                 train_loss.update(ret)
                 torch.cuda.empty_cache()
                 self.log_res(i//4, train_loss)
+        torch.save({'actor': self.actor, 'q1': self.q1, 'q2': self.q2}, self.args["save_path"])
 
     def get_train_policy_batch(self, batch_size=None):
         batch_size = batch_size or self.args['train_batch_size']

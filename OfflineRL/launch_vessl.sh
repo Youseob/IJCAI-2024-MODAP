@@ -14,6 +14,7 @@ python examples/train_d4rl.py --algo_name=pessi_bayrl_v2 \
                               --transition_init_num=110 \
                               --transition_select_num=$num_model \
                               --dynamics_path=/model/$dataset-$num_model-seed-$seed.th \
+                              --save_path=/output/$dataset-$seed-ckpt.th \
                               --traj_num_to_infer=$num_traj_infer \
                               --belief_update_mode=$belief_mode \
                               --value_bias=$minus_value \

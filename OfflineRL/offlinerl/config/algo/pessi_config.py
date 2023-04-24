@@ -68,6 +68,7 @@ belief_update_mode = 'bay' # 'bay', 'softmax', 'kl-reg'
 q_lambda = 10
 temp = None 
 add_value_to_rt = True
+save_path = '/root/output/ckpt.th'
 
 #tune
 # params_tune = {

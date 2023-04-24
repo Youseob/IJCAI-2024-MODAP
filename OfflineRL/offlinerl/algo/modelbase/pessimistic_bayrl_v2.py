@@ -193,6 +193,7 @@ class AlgoTrainer(BaseAlgo):
                 train_loss.update(ret)
                 torch.cuda.empty_cache()
                 self.log_res(i//4 + self.args["warmup_epoch"], train_loss)
+        torch.save({'actor': self.actor, 'q1': self.q1, 'q2': self.q2}, self.args["save_path"])
 
     def get_train_policy_batch(self, batch_size=None, warmup=False):
         batch_size = batch_size or self.args['train_batch_size']
@@ -305,11 +306,7 @@ class AlgoTrainer(BaseAlgo):
                 #######
                 if bayrl_rollout:
                     pess_belief = self.get_pessimistic_belief(obs, act, belief)
-                    try:
-                        model_indexes = Categorical(logits=pess_belief).sample().cpu().numpy()
-
-                    except:
-                        import pdb; pdb.set_trace()
+                    model_indexes = Categorical(logits=pess_belief).sample().cpu().numpy()
                 #######
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)
@@ -565,7 +562,7 @@ class AlgoTrainer(BaseAlgo):
             q_sab2 = self.q2(belief, act, obs)
             q_sab = torch.min(q_sab1, q_sab2) # bs, 1
             value = value - q_sab[None, ...]
-        # torch.clamp(value, None, 500)
+        value = torch.clamp(value, -500., 500.)
         belief = belief * torch.exp(-value.squeeze(-1).T / self.args["q_lambda"])# bs, num_dynamics 
         # belief /= belief.sum(-1, keepdim=True)
         return belief

@@ -323,12 +323,7 @@ class AlgoTrainer(BaseAlgo):
             self.model_pool._pointer %= self.model_pool._max_size
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
 
-        return {"overconf_percent" : overconfi_percent, 
-                "mdp_value_max" : max_value, 
-                "mdp_value_min" : min_value, 
-                "tvd_min" : tvd_min, 
-                "tvd_max" : tvd_max, 
-                "tvd_mean" : tvd_mean }
+        return {"overconf_percent" : overconfi_percent }
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)

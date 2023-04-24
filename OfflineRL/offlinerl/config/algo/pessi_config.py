@@ -59,12 +59,15 @@ discount = 0.99
 soft_target_tau = 5e-3
 
 horizon = 5
+warmup_epoch = 500
+warmup_in_train_epoch = 500
+value_bias = False
 # vessl exp 2022/04/11
 calibration = True
-add_value_to_rt = True
 belief_update_mode = 'bay' # 'bay', 'softmax', 'kl-reg'
 q_lambda = 10
 temp = None 
+add_value_to_rt = True
 
 #tune
 # params_tune = {

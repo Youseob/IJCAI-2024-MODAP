@@ -5,13 +5,13 @@ warnings.filterwarnings('ignore')
 
 
 from offlinerl.config.algo import cql_config, plas_config, mopo_config, moose_config, bcqd_config, bcq_config, bc_config, crr_config, combo_config, bremen_config, maple_config, \
-        bayrl_config, bayrl_cvar_config, model_analysis_config, bayrl_calib_config, \
+        bayrl_config, bayrl_cvar_config, model_analysis_config, bayrl_calib_config, bayrl_v2_config, \
         adv_bayrl_config, adv_bayrl_v2_config, adv_bayrl_v3_config, pessi_config
 
 from offlinerl.utils.config import parse_config
 from offlinerl.algo.modelfree import cql, plas, bcqd, bcq, bc, crr
 from offlinerl.algo.modelbase import mopo, moose, combo, bremen, maple, bayrl, bayrl_cvar, model_analysis, bayrl_calib,\
-                                    adv_bayrl, adv_bayrl_v2, adv_bayrl_v3, pessimistic_bayrl
+                                    adv_bayrl, adv_bayrl_v2, adv_bayrl_v3, pessimistic_bayrl, bayrl_v2, pessimistic_bayrl_v2
 
 algo_dict = {
     'bc' : {"algo" : bc, "config" : bc_config},
@@ -32,7 +32,9 @@ algo_dict = {
     'adv_bayrl': {'algo': adv_bayrl, 'config': adv_bayrl_config},
     'adv_bayrl_v2': {'algo': adv_bayrl_v2, 'config': adv_bayrl_v2_config},
     'adv_bayrl_v3': {'algo': adv_bayrl_v3, 'config': adv_bayrl_v3_config},
-    'pessi_bayrl' : {'algo': pessimistic_bayrl, 'config': pessi_config}
+    'pessi_bayrl' : {'algo': pessimistic_bayrl, 'config': pessi_config},
+    'pessi_bayrl_v2' : {'algo': pessimistic_bayrl_v2, 'config': pessi_config},
+    'bayrl_v2' : {'algo' : bayrl_v2, 'config': bayrl_v2_config}
 }
 
 def algo_select(command_args, algo_config_module=None):

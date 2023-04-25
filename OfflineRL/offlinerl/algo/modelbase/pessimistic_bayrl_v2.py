@@ -158,8 +158,9 @@ class AlgoTrainer(BaseAlgo):
         # warmup 
         for w in range(self.args["warmup_epoch"]):
             ret = self.rollout_model(self.args['rollout_batch_size']*2, warmup=True)
+            torch.cuda.empty_cache()
+            warmup_loss = { 'warmup_policy_loss': 0,'warmup_q_loss': 0, 'warmup_q_min': 0, 'warmup_q_max': 0}
             for j in range(self.args['in_train_epoch']):
-                warmup_loss = { 'warmup_policy_loss': 0,'warmup_q_loss': 0, 'warmup_q_min': 0, 'warmup_q_max': 0}
                 batch = self.get_train_policy_batch(self.args['train_batch_size'], warmup=True)
                 in_res = self.train_policy(batch, warmup=True)
                 for key in in_res:
@@ -176,7 +177,6 @@ class AlgoTrainer(BaseAlgo):
         for i in range(self.args['out_train_epoch']):
             ret = self.rollout_model(self.args['rollout_batch_size'], warmup=False, bayrl_rollout=True)
             torch.cuda.empty_cache()
-
             train_loss = {'policy_loss': 0,'q_loss': 0, 'q_min': 0, 'q_max': 0}
             for j in range(self.args['in_train_epoch']):
                 batch = self.get_train_policy_batch(self.args['train_batch_size'])
@@ -187,14 +187,13 @@ class AlgoTrainer(BaseAlgo):
                 train_loss[k] = train_loss[k]/self.args['in_train_epoch']
             
             # evaluate in mujoco
-            if i % 4 == 0:
+            if i % 2 == 0:
                 eval_loss = self.eval_policy()
                 train_loss.update(eval_loss)
                 train_loss.update(ret)
                 torch.cuda.empty_cache()
-                self.log_res(i//4 + self.args["warmup_epoch"], train_loss)
-        torch.save({'actor': self.actor, 'q1': self.q1, 'q2': self.q2}, self.args["save_path"])
-
+                self.log_res(i//2 + self.args["warmup_epoch"], train_loss)
+        torch.save({'actor': self.actor, 'q1': self.q1, 'q2': self.q2}, self.args['save_path'])
     def get_train_policy_batch(self, batch_size=None, warmup=False):
         batch_size = batch_size or self.args['train_batch_size']
 

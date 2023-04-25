@@ -283,16 +283,10 @@ class AlgoTrainer(BaseAlgo):
                 reward = samples[:, -1:] #next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
                 next_obs = samples[:, :-1] #next_obses[:, :, :-1]
                 if self.recalibrator is not None:
-                    # log_probs = torch.stack([self.recalibrator.calibrated_prob(next_obses, \
-                    #                                         mu=next_obs_dists.mean[index], \
-                    #                                         std=next_obs_dists.scale[index], \
-                    #                                         ).log().sum(-1) for index in range(num_dynamics)])
                     log_prob = self.recalibrator.calibrated_prob(samples, pred_dist=next_obs_dists).log().sum(-1)
                 
                 else:
-                    # log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics, bs
                     log_prob = next_obs_dists.log_prob(samples).sum(-1) # num_dynamics, bs
-
 
                 term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
                 next_obs = torch.clamp(next_obs, obs_min, obs_max)

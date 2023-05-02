@@ -72,7 +72,7 @@ class AlgoTrainer(BaseAlgo):
         self.args = args        
         wandb.init(
             config=self.args,
-            project='424' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project='502' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -156,11 +156,12 @@ class AlgoTrainer(BaseAlgo):
         self.rew_min = train_buffer['rew'].min() 
         
         # warmup 
+        print("[ DEBUG ] start warm-up")
         for w in range(self.args["warmup_epoch"]):
             ret = self.rollout_model(self.args['rollout_batch_size']*2, warmup=True)
             torch.cuda.empty_cache()
             warmup_loss = { 'warmup_policy_loss': 0,'warmup_q_loss': 0, 'warmup_q_min': 0, 'warmup_q_max': 0}
-            for j in range(self.args['in_train_epoch']):
+            for j in range(self.args['warmup_in_train_epoch']):
                 batch = self.get_train_policy_batch(self.args['train_batch_size'], warmup=True)
                 in_res = self.train_policy(batch, warmup=True)
                 for key in in_res:
@@ -174,8 +175,10 @@ class AlgoTrainer(BaseAlgo):
 
         self.model_pool._pointer = 0
         self.model_pool._size = 0
+        print("[ DEBUG ] start train loop")         
         for i in range(self.args['out_train_epoch']):
-            ret = self.rollout_model(self.args['rollout_batch_size'], warmup=False, bayrl_rollout=True)
+            for _ in range(5):
+                ret = self.rollout_model(self.args['rollout_batch_size'], warmup=False, bayrl_rollout=True)
             torch.cuda.empty_cache()
             train_loss = {'policy_loss': 0,'q_loss': 0, 'q_min': 0, 'q_max': 0}
             for j in range(self.args['in_train_epoch']):
@@ -194,6 +197,7 @@ class AlgoTrainer(BaseAlgo):
                 torch.cuda.empty_cache()
                 self.log_res(i//2 + self.args["warmup_epoch"], train_loss)
         torch.save({'actor': self.actor, 'q1': self.q1, 'q2': self.q2}, self.args['save_path'])
+
     def get_train_policy_batch(self, batch_size=None, warmup=False):
         batch_size = batch_size or self.args['train_batch_size']
 
@@ -423,7 +427,6 @@ class AlgoTrainer(BaseAlgo):
                 'q_max' : min_q_.max().item(),
                 'q_min' : min_q_.min().item()}
 
-
     def _select_best_indexes(self, metrics, n):
         pairs = [(metric, index) for metric, index in zip(metrics, range(len(metrics)))]
         pairs = sorted(pairs, key=lambda x: x[0])
@@ -540,7 +543,6 @@ class AlgoTrainer(BaseAlgo):
         next_belief = belief * torch.exp(log_prob).T # bs, num_dynamics     
         next_belief /= next_belief.sum(-1, keepdim=True)
         return next_belief
-
 
     @torch.no_grad()
     def get_pessimistic_belief(self, obs, act, belief):

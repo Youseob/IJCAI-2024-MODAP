@@ -72,7 +72,7 @@ class AlgoTrainer(BaseAlgo):
         self.args = args        
         wandb.init(
             config=self.args,
-            project='bayrl' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project='502_bayrl' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -155,8 +155,9 @@ class AlgoTrainer(BaseAlgo):
         
 
         for i in range(self.args['out_train_epoch']):
-            # for _ in range(20000 // self.args["rollout_batch_size"]):
-            ret = self.rollout_model(self.args['rollout_batch_size'])
+            # rollout_batch_size 10000
+            for _ in range(5):
+                ret = self.rollout_model(self.args['rollout_batch_size'])
             torch.cuda.empty_cache()
 
             train_loss = {
@@ -172,7 +173,7 @@ class AlgoTrainer(BaseAlgo):
                 train_loss[k] = train_loss[k]/self.args['in_train_epoch']
             
             # evaluate in mujoco
-            if i % 4 == 0:
+            if i % 2 == 0:
                 eval_loss = self.eval_policy()
                 train_loss.update(eval_loss)
                 train_loss.update(ret)

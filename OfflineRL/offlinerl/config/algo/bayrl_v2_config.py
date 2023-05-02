@@ -19,12 +19,12 @@ Guassain_hidden_sizes = (256,256)
 value_hidden_sizes=(256,256)
 hidden_sizes=(16,)
 model_pool_size = 250000
-rollout_batch_size = 20000 # 50000
+rollout_batch_size = 10000 # 50000
 traj_num_to_infer = 1000
 uniform_rollout = False
 # epoch, batch size
-out_train_epoch = 2000
-in_train_epoch = 500 
+out_train_epoch = 1000
+in_train_epoch = 1000 
 train_batch_size = 256              # train policy num of trajectories
 number_runs_eval = 10            # evaluation epochs in mujoco 
 

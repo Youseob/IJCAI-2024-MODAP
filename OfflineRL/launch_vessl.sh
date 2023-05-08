@@ -6,7 +6,7 @@ cal=True
 # r_scale=10
 belief_mode=bay
 # seed=42
-horizon_step=5
+horizon_step=10
 
 python examples/train_d4rl.py --algo_name=pessi_bayrl_v2 \
                               --exp_name=pessi-$lambda-minus_value-$minus_value \

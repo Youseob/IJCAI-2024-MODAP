@@ -15,7 +15,7 @@ import offlinerl.utils.loader as loader
 from offlinerl.utils.net.terminal_check import is_terminal
 
 from offlinerl.utils.data import ModelBuffer
-from offlinerl.utils.net.model.ensemble import EnsembleTransition
+from offlinerl.utils.net.model.ensemble import EnsembleTransition, EnsembleReward
 from offlinerl.utils.net.model_GRU import GRU_Model
 from offlinerl.utils.net.maple_actor import Maple_actor
 from offlinerl.utils.net.model.maple_critic import Maple_critic
@@ -23,6 +23,8 @@ from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
 from offlinerl.utils import loader
 import uuid
 import wandb
+
+
 def algo_init(args):
     logger.info('Run algo_init function')
 
@@ -42,8 +44,12 @@ def algo_init(args):
     args['data_name'] = args['task'][5:]
 
     transition = EnsembleTransition(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
-                                    args['transition_init_num'], mode=args['mode']).to(args['device'])
+                                    args['transition_init_num'], mode=args['mode'], with_reward=False).to(args['device'])
     transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
+
+    reward = EnsembleReward(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
+                                    args['transition_init_num']).to(args['device'])
+    reward_optim = torch.optim.AdamW(reward.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
 
     policy_gru = GRU_Model(args['obs_shape'], args['action_shape'], args['device'],args['lstm_hidden_unit']).to(args['device'])
     value_gru = GRU_Model(args['obs_shape'], args['action_shape'], args['device'], args['lstm_hidden_unit']).to(args['device'])
@@ -60,6 +66,7 @@ def algo_init(args):
 
     return {
         "transition": {"net": transition, "opt": transition_optim},
+        "reward" : {"net": reward, "opt": reward_optim},
         "actor": {"net": [policy_gru,actor], "opt": actor_optim},
         "log_alpha": {"net": log_alpha, "opt": alpha_optimizer},
         "critic": {"net": [value_gru, q1, q2], "opt": critic_optim},
@@ -72,13 +79,16 @@ class AlgoTrainer(BaseAlgo):
         self.args = args        
         wandb.init(
             config=self.args,
-            project="529"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project=self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
         )
         self.transition = algo_init['transition']['net']
         self.transition_optim = algo_init['transition']['opt']
+        self.reward_model = algo_init['reward']['net']
+        self.reward_model_optim = algo_init['reward']['opt']
+        
         self.selected_transitions = None
 
         self.policy_gru, self.actor = algo_init['actor']['net']
@@ -100,19 +110,13 @@ class AlgoTrainer(BaseAlgo):
         self.args['target_entropy'] = - self.args['action_shape']
         self.args['model_pool_size'] = int(args['model_pool_size'])
 
-        print(f"[ DEBUG ] exp_name {self.args['exp_name']}")
-
     def train(self, train_buffer, val_buffer, callback_fn):
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
         if self.args['dynamics_path'] is not None:
-            ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
-            self.transition = ckpt["model"].to(self.device)
-            print("[ DEBUG ] load state dict model done")
-            # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
+            self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
         else:
             self.train_transition(train_buffer)
-            if self.args['dynamics_save_path'] is not None: 
-                torch.save({'model': self.transition, 'optim': self.transition_optim}, self.args['dynamics_save_path'])
+            if self.args['dynamics_save_path'] is not None: torch.save(self.transition, self.args['dynamics_save_path'])
         if self.args['only_dynamics']:
             return
         self.transition.requires_grad_(False)
@@ -137,16 +141,17 @@ class AlgoTrainer(BaseAlgo):
         self.obs_min = np.minimum(self.obs_min, -100)
 
         self.rew_max = train_buffer['rew'].max()
-        # self.rew_min = train_buffer['rew'].min() - self.args['penalty_clip'] * self.args['lam']
-        self.rew_min = train_buffer['rew'].min() 
+        self.rew_min = train_buffer['rew'].min() - self.args['penalty_clip'] * self.args['lam']
 
         for i in range(self.args['out_train_epoch']):
-            res = self.rollout_model(self.args['rollout_batch_size'])
+            uncertainty_mean, uncertainty_max = self.rollout_model(self.args['rollout_batch_size'])
             torch.cuda.empty_cache()
 
             train_loss = {}
             train_loss['policy_loss'] = 0
             train_loss['q_loss'] = 0
+            train_loss['uncertainty_mean'] = uncertainty_mean
+            train_loss['uncertainty_max'] = uncertainty_max
             for j in range(self.args['in_train_epoch']):
                 batch = self.get_train_policy_batch(self.args['train_batch_size'])
                 in_res = self.train_policy(batch)
@@ -157,11 +162,11 @@ class AlgoTrainer(BaseAlgo):
             
             # evaluate in mujoco
             eval_loss = self.eval_policy()
+            if i % 100 == 0 or i == self.args['out_train_epoch'] - 1:
+                self.eval_one_trajectory()
             train_loss.update(eval_loss)
-            train_loss.update(res)
             torch.cuda.empty_cache()
             self.log_res(i, train_loss)
-            
             if i%4 == 0:
                 loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
                                  maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
@@ -233,12 +238,14 @@ class AlgoTrainer(BaseAlgo):
             for batch_num in range(int(np.ceil(idxs.shape[-1] / batch_size))):
                 batch_idxs = idxs[:, batch_num * batch_size:(batch_num + 1) * batch_size]
                 batch = train_buffer[batch_idxs]
-                self._train_transition(self.transition, batch, self.transition_optim)
-            new_val_losses = list(self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy())
-            print(new_val_losses)
+                self._train_transition_reward(batch)
+            new_val_transition_losses, new_val_reward_losses = self._eval_transition(self.transition, valdata)
+            new_val_transition_losses = list(new_val_transition_losses.cpu().numpy())
+            new_val_reward_losses = list(new_val_reward_losses)
+            # print(new_val_losses)
 
             indexes = []
-            for i, new_loss, old_loss in zip(range(len(val_losses)), new_val_losses, val_losses):
+            for i, new_loss, old_loss in zip(range(len(val_losses)), new_val_transition_losses, val_losses):
                 if new_loss < old_loss:
                     indexes.append(i)
                     val_losses[i] = new_loss
@@ -257,8 +264,7 @@ class AlgoTrainer(BaseAlgo):
         self.transition.set_select(indexes)
         return self.transition
 
-    @torch.no_grad()
-    def rollout_model(self,rollout_batch_size, deterministic=False):
+    def diversity_model_loss(self, rollout_batch_size, deterministic=False):
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
         num_dynamics = self.args["transition_select_num"]
         obs = batch['observations']
@@ -273,120 +279,34 @@ class AlgoTrainer(BaseAlgo):
         rew_min = self.rew_min
 
         traj_log_probs = torch.zeros(num_dynamics, rollout_batch_size).float().to(self.device)
-        current_nonterm = np.ones((len(obs)), dtype=bool)
-        samples = None
+
+        model_indexes = None
         obs = torch.from_numpy(obs).to(self.device)
         lst_action = torch.from_numpy(lst_action).to(self.device)
         hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)
         hidden = (hidden_policy, lst_action)
+        model_indexes = np.random.randint(0, next_obses.shape[0], size=(obs.shape[0]))
 
-        model_indexes = np.random.randint(0, num_dynamics, size=(obs.shape[0]))
         for i in range(self.args['horizon']):
             act, hidden_policy = self.get_meta_action(obs, hidden, deterministic)
             obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
             next_obs_dists = self.transition(obs_action)
             next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
-            # traj_log_probs += next_obs_dists.log_prob(next_obses)[:, :, :-1].sum(-1) # num_dynamics, rollout_batch_size
-            
             next_obses = next_obses[:, :, :-1]
-            reward_mode = next_obs_dists.mean[:, :, -1] # num_dynamics, rollout_batch
-            reward = reward_mode.mean(0, keepdim=True).T # rollbout_batch , 1
+
             next_obs = next_obses[model_indexes, np.arange(obs.shape[0])]
-            # TODO check reward shapce check, (rollout_batch, 1) or others
-            term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
+            traj_log_probs += next_obs_dists.log_prob(next_obs).sum(-1) # num_dynamics, rollout_batch_size
             next_obs = torch.clamp(next_obs, obs_min, obs_max)
-            reward = torch.clamp(reward, rew_min, rew_max)
-
-            traj_log_probs += next_obs_dists.log_prob(torch.cat([next_obs, reward], dim=-1))[:, :, :-1].sum(-1) # num_dynamics, rollout_batch_size
-            penalized_reward = reward
-
-            nonterm_mask = ~term.squeeze(-1)
-            #nonterm_mask: 1-not done, 0-done
-            samples = {'observations': obs.cpu().numpy(), 'actions': act.cpu().numpy(), 'next_observations': next_obs.cpu().numpy(),
-                        'rewards': penalized_reward.cpu().numpy(), 'terminals': term,
-                        'last_actions': lst_action.cpu().numpy(),
-                        'valid': current_nonterm.reshape(-1, 1),
-                        'value_hidden': hidden_value_init, 'policy_hidden': hidden_policy_init} 
-            samples = {k: np.expand_dims(v, 1) for k, v in samples.items()}
-            num_samples = samples['observations'].shape[0]
-            index = np.arange(
-                self.model_pool._pointer, self.model_pool._pointer + num_samples) % self.model_pool._max_size
-            for k in samples:
-                self.model_pool.fields[k][index, i] = samples[k][:, 0]
-            current_nonterm = current_nonterm & nonterm_mask
             obs = next_obs
             lst_action = act
             hidden = (hidden_policy, lst_action)
-        self.model_pool._pointer += num_samples
-        self.model_pool._pointer %= self.model_pool._max_size
-        self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
         
-        mi = traj_log_probs[model_indexes, np.arange(rollout_batch_size)]
-        mi -= torch.log(torch.exp(traj_log_probs).sum(0) / num_dynamics) # num_dynamics, rollout_batch_size
-        
-        return {"MI" : mi.mean().item()}
+        # log p(\tau | m)
+        loss = traj_log_probs[model_indexes, np.arange(rollout_batch_size)]
+        # \sum_m p(m)p(\tau | m)
+        loss -= torch.log(torch.exp(traj_log_probs).sum(0) / num_dynamics) # num_dynamics, rollout_batch_size
 
-    @torch.no_grad()
-    def eval_rollout_model(self, rollout_batch_size, deterministic=True):
-        batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
-        obs = batch['observations']
-        lst_action = batch['last_actions']
-
-        hidden_value_init = batch['value_hidden']
-        hidden_policy_init = batch['policy_hidden']
-
-        num_dynamics = len(self.transition.output_layer.select)
-        obs_max = torch.tensor(self.obs_max).to(self.device)
-        obs_min = torch.tensor(self.obs_min).to(self.device)
-        rew_max = self.rew_max
-        rew_min = self.rew_min
-
-        # uncertainty_list = []
-        # uncertainty_max = []
-
-        # current_nonterm = np.ones((len(obs)), dtype=bool)
-        # samples = None
-
-        obses = torch.from_numpy(obs).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
-        lst_action = torch.from_numpy(lst_action).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
-        hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)[None, ...].repeat(num_dynamics, 1, 1).view(num_dynamics*rollout_batch_size, -1)
-        hidden = (hidden_policy, lst_action)
-        rt = 0
-        for i in range(self.args['horizon']):
-            # obs (num_dynamics * rollout_batch_size, dim)
-            acts, hidden_policies = self.get_meta_action(obses, hidden, deterministic=True)
-            # (num_dynamics, rollout_batch_size, dim)
-            obs_action = torch.cat([obses,acts], dim=-1).reshape(num_dynamics, rollout_batch_size, -1) # (num_dynamics, 500000 : rollout_batch_size, 18)
-            next_obs_dists = self.transition(obs_action)
-            next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
-            rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
-            next_obses = next_obses[:, :, :-1] # (num_dynamics, rollout_batch_size, obs_dim)
-            
-            next_obses = torch.clamp(next_obses, obs_min, obs_max)
-            rewards = torch.clamp(rewards, rew_min, rew_max)
-            rt += rewards
-
-            # (num_dynamics * rollout_batch_size, obs_dim)
-            obses = next_obses.view(num_dynamics*rollout_batch_size, -1)
-            lst_action = acts
-            hidden = (hidden_policies, lst_action)
-        
-        res = OrderedDict()
-        rt_mean = rt.mean(1)
-        res.update({
-            "Average Perf" : rt_mean.mean().item(),
-            "Max Perf" : rt_mean.max().item(),
-            "Min Perf" : rt_mean.min().item(),
-        })
-        for task in range(num_dynamics):
-            res.update({
-                f"{task}-th Perf" : rt_mean[task].item()
-            })
-
-        print(f"Average Perf :{rt_mean.mean().item()}")
-        print(f"Max Perf: {rt_mean.max().item()}")
-        print(f"Min Perf: {rt_mean.min().item()}")
-        return res
+        return loss.mean() 
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -468,32 +388,47 @@ class AlgoTrainer(BaseAlgo):
         selected_indexes = [pairs[i][1] for i in range(n)]
         return selected_indexes
 
-    def _train_transition(self, transition, data, optim):
-        data.to_torch(device=self.device)
+    def mle_loss(self, batch_size):
+        batch = self.env_pool.random_batch(batch_size)
+        batch.to_torch(device=self.device)
         ''' calculation in MOPO '''
-        dist = transition(torch.cat([data['obs'], data['act']], dim=-1))
-        loss = - dist.log_prob(torch.cat([data['obs_next'], data['rew']], dim=-1))
+        dist = self.transition(torch.cat([batch['obs'], batch['act']], dim=-1))
+        loss = - dist.log_prob(batch['obs_next'])
         loss = loss.sum()
         ''' calculation when not deterministic TODO: figure out the difference A: they are the same when Gaussian''' 
-        loss += 0.01 * (2. * transition.max_logstd).sum() - 0.01 * (2. * transition.min_logstd).sum()
+        loss += 0.01 * (2. * self.transition.max_logstd).sum() - 0.01 * (2. * self.transition.min_logstd).sum()
+        return loss 
+    
+    def _train_transition_reward(self, data):
+        data.to_torch(device=self.device)
+        ''' calculation in MOPO '''
+        transition_dist = self.transition(torch.cat([data['obs'], data['act']], dim=-1))
+        reward_dist = self.reward_model(torch.cat([data['obs'], data['act']], dim=-1))
 
-        optim.zero_grad()
-        loss.backward()
-        optim.step()
+        loss_transition = - transition_dist.log_prob(data['obs_next'])
+        loss_transition = loss_transition.sum()
+        loss_transition += 0.01 * (2. * self.transition.max_logstd).sum() - 0.01 * (2. * self.transition.min_logstd).sum()
+        
+        self.transition_optim.zero_grad()
+        self.loss_transition.backward()
+        self.transition_optim.step()
 
-    def _eval_transition(self, transition, valdata, inc_var_loss=True):
+        loss_reward = - reward_dist.log_prob(data['rew'])
+        loss_reward = loss_reward.sum()
+        loss_reward += 0.01 * (2. * self.reward_model.max_logstd).sum() - 0.01 * (2. * self.reward_model.min_logstd).sum()
+
+        self.reward_model_optim.zero_grad()
+        loss_reward.backward()
+        self.reward_model_optim.step()
+
+    def _eval_transition_reward(self, transition, reward_model, valdata):
         with torch.no_grad():
             valdata.to_torch(device=self.device)
-            dist = transition(torch.cat([valdata['obs'], valdata['act']], dim=-1))
-            if inc_var_loss:
-                mse_losses = ((dist.mean - torch.cat([valdata['obs_next'], valdata['rew']], dim=-1)) ** 2 / (dist.variance + 1e-8)).mean(dim=(1, 2))
-                logvar = 2 * transition.max_logstd - torch.nn.functional.softplus(2 * transition.max_logstd - torch.log(dist.variance))
-                logvar = 2 * transition.min_logstd + torch.nn.functional.softplus(logvar - 2 * transition.min_logstd)
-                var_losses = logvar.mean(dim=(1, 2))
-                loss = mse_losses + var_losses
-            else:
-                loss = ((dist.mean - torch.cat([valdata['obs_next'], valdata['rew']], dim=-1)) ** 2).mean(dim=(1, 2))
-            return loss
+            transition_dist = transition(torch.cat([valdata['obs'], valdata['act']], dim=-1))
+            reward_dist = reward_model(torch.cat([valdata['obs'], valdata['act']], dim=-1))
+            transition_loss = ((transition_dist.mean - valdata['obs_next']) ** 2).mean(dim=(1, 2))
+            reward_loss = ((reward_dist.mean - valdata['rew'])** 2).mean(dim=(1, 2))
+            return transition_loss, reward_loss
 
     def eval_policy(self):
         env = get_env(self.args['task'])
@@ -564,48 +499,3 @@ class AlgoTrainer(BaseAlgo):
                 lengths += 1
             print("======== Action Mean mean: {}, Action Std mean: {}, Reward: {}, Length: {} ========"\
                 .format(np.mean(np.array(mu_list), axis=0), np.mean(np.array(std_list), axis=0), reward, lengths))
-
-    # def diversity_model(self, rollout_batch_size, deterministic=False):
-    #     batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
-    #     num_dynamics = self.args["transition_select_num"]
-    #     obs = batch['observations']
-    #     lst_action = batch['last_actions']
-
-    #     hidden_value_init = batch['value_hidden']
-    #     hidden_policy_init = batch['policy_hidden']
-
-    #     obs_max = torch.tensor(self.obs_max).to(self.device)
-    #     obs_min = torch.tensor(self.obs_min).to(self.device)
-    #     rew_max = self.rew_max
-    #     rew_min = self.rew_min
-
-    #     traj_log_probs = torch.zeros(num_dynamics, rollout_batch_size).float().to(self.device)
-
-    #     # model_indexes = None
-    #     obs = torch.from_numpy(obs).to(self.device)
-    #     lst_action = torch.from_numpy(lst_action).to(self.device)
-    #     hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)
-    #     hidden = (hidden_policy, lst_action)
-        
-    #     model_indexes = np.random.randint(0, next_obses.shape[0], size=(obs.shape[0]))
-
-    #     for i in range(self.args['horizon']):
-    #         act, hidden_policy = self.get_meta_action(obs, hidden, deterministic)
-    #         obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
-    #         next_obs_dists = self.transition(obs_action)
-    #         next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
-    #         next_obses = next_obses[:, :, :-1]
-
-    #         next_obs = next_obses[model_indexes, np.arange(obs.shape[0])]
-    #         traj_log_probs += next_obs_dists.log_prob(next_obs).sum(-1) # num_dynamics, rollout_batch_size
-    #         next_obs = torch.clamp(next_obs, obs_min, obs_max)
-    #         obs = next_obs
-    #         lst_action = act
-    #         hidden = (hidden_policy, lst_action)
-        
-    #     # log p(\tau | m)
-    #     loss = traj_log_probs[model_indexes, np.arange(rollout_batch_size)]
-    #     # \sum_m p(m)p(\tau | m)
-    #     loss -= torch.log(torch.exp(traj_log_probs).sum(0) / num_dynamics) # num_dynamics, rollout_batch_size
-
-    #     return loss.mean() 

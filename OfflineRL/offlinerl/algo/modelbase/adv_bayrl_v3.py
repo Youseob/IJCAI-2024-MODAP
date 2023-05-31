@@ -270,8 +270,7 @@ class AlgoTrainer(BaseAlgo):
         self.transition.set_select(indexes)
         return self.transition
 
-    def rollout_model(self,rollout_batch_size, epoch, deterministic=False, ):
-        
+    def rollout_model(self,rollout_batch_size, epoch, deterministic=False):
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
         num_dynamics = len(self.transition.output_layer.select)
         obs = torch.from_numpy(batch['observations']).to(self.device)
@@ -283,25 +282,16 @@ class AlgoTrainer(BaseAlgo):
         current_nonterm = np.ones((len(obs)), dtype=bool)
         samples = None
 
-        #######################################
-        logits = self.task_dist(obs)
-        task_dist = Categorical(logits=logits)
-        adv_action = task_dist.sample()
-        model_indexes = adv_action.cpu().numpy()
-        mdp_values = torch.zeros(rollout_batch_size).float().to(self.device)
-        true_dist = Categorical(belief)
-        # reg = task_dist.log_prob(adv_action) - Categorical(belief).log_prob(adv_action)
         with torch.no_grad():
             for h in range(self.args['horizon']):
+                # sample mdp
+                model_indexes = Categorical(belief).sample().cpu().numpy()
                 act = self.get_meta_action(obs, belief, deterministic)
                 obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
                 next_obs_dists = self.transition(obs_action)
                 next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim)
                 
                 if self.recalibrator is not None:
-                    # num_dynamics, rollout_batch_size, obs_dim
-                    #[es*(es, bs)]
-                    # es, es, bs
                     log_probs = torch.stack([self.recalibrator.calibrated_prob(next_obses, \
                                                             mu=next_obs_dists.mean[index], \
                                                             std=next_obs_dists.scale[index], \
@@ -309,7 +299,6 @@ class AlgoTrainer(BaseAlgo):
                 
                 else:
                     log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) for index in range(num_dynamics)]) # num_dynamics
-                # log_probs = next_obs_dists.log_prob(next_obses[None, ...].repeat(num_dynamics, 1, 1, 1)).sum(-1) # (num_dynamics, num_dynamics, rollout_batch_size)
                 rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
                 next_obses = next_obses[:, :, :-1]
 
@@ -323,8 +312,6 @@ class AlgoTrainer(BaseAlgo):
                 log_prob = torch.clamp(log_prob, -20, 5.)
                 next_belief = self.belief_update(belief, log_prob=log_prob)
 
-                mdp_values += (self.args["discount"]**h) * reward.squeeze(-1) * torch.from_numpy(current_nonterm).to(self.device)
-                ##
                 nonterm_mask = ~term.squeeze(-1)
                 #nonterm_mask: 1-not done, 0-done
                 samples = {'observations': obs.cpu().numpy(), 'actions': act.cpu().numpy(), 'next_observations': next_obs.cpu().numpy(),
@@ -348,27 +335,7 @@ class AlgoTrainer(BaseAlgo):
             self.model_pool._pointer %= self.model_pool._max_size
             self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
 
-            if self.args["add_value_to_rt"]:
-                _, sampled_act, log_prob_act, _ = self.actor(belief, obs)
-                value1 = self.target_q1(belief, sampled_act, obs)
-                value2 = self.target_q2(belief, sampled_act, obs)
-                value = torch.min(value1, value2) - torch.exp(self.log_alpha) * log_prob_act.unsqueeze(-1)
-                # (num_dynamics)
-                mdp_values += (self.args['discount']**(self.args['horizon'])) * torch.from_numpy(current_nonterm).to(self.device) * value.squeeze(-1)
-            
-        # belief_net update
-        mdp_values *= -self.args["reward_scale"]
-        kl = torch.distributions.kl_divergence(true_dist, task_dist)
-        probs = torch.softmax(logits, dim=-1)[np.arange(obs.shape[0]), model_indexes]
-
-        loss = (-probs.log() * mdp_values + kl).mean()
-        self.task_dist_optim.zero_grad()
-        loss.backward()
-        self.task_dist_optim.step()
-        return {"overconf_percent" : overconfi_percent, \
-                "adv_return": mdp_values.mean().item(), \
-                "b_kl" : kl.mean().item(), \
-                "adv_loss" : loss.item()}
+        return {"overconf_percent" : overconfi_percent}
 
     def train_policy(self, batch):
         batch['valid'] = batch['valid'].astype(int)
@@ -394,10 +361,43 @@ class AlgoTrainer(BaseAlgo):
             Q_target = batch['rewards'] + self.args['discount']*(~batch['terminals'])*(Q_target)
             Q_target = torch.clip(Q_target,self.rew_min/(1-self.args['discount']),\
                                   self.rew_max/(1-self.args['discount']))
+            
+            ##################################################################################
+            # Q_adv(s, a, b) = m ~ b [R_M(s, a) - gamma * Q(s', a', b')
+            next_obs_dists = self.transition(torch.cat([batch["observations"], batch["actions"]], dim=-1))
+            next_obses = next_obs_dists.sample()
+            rewards = next_obses[:, :, -1:] # (num_dynamics, rollout_batch_size, obs_dim)
+            next_obses = next_obses[:, :, :-1]
+            ## done check 
+            
+            if self.recalibrator is not None:
+                #[es*(es, bs)]
+                # es, es, bs
+                log_probs = torch.stack([self.recalibrator.calibrated_prob(next_obses, \
+                                                        mu=next_obs_dists.mean[index], \
+                                                        std=next_obs_dists.scale[index], \
+                                                        ).log().sum(-1) for index in range(num_dynamics)])
+            else:
+                log_probs = torch.stack([Normal(next_obs_dists.mean[index], next_obs_dists.scale[index]).log_prob(next_obses).sum(-1) \
+                                         for index in range(num_dynamics)], dim=-1) # num_dynamics, bs, probs
+            log_prob = torch.clamp(log_prob, -20., 5.) 
+            # bs, num_dynamics, dim
+            # (1, bs, dim) * (num_dynamics, bs, probs)  ==> num_dynamics, bs, dim
+            next_belief = belief[None, ...] * torch.exp(log_prob)
+            next_belief /= next_belief.sum(-1, keepdim=True)
+            # check!
+            mu_target, act_target, log_p_act_target, std_target = self.actor(next_belief, next_obses)
+            q1_target = self.target_q1(next_belief,act_target,next_obses)
+            q2_target = self.target_q2(next_belief,act_target,next_obses)
+            # bs, num_dyanmics, 1 
+            adv_q_target = torch.min(q1_target, q2_target) 
+            
+
 
         q1_loss = torch.sum(((q1-Q_target)**2)*batch['valid'])/valid_num
         q2_loss = torch.sum(((q2-Q_target)**2)*batch['valid'])/valid_num
         q_loss = (q1_loss+q2_loss)/2
+
 
         self.critic_optim.zero_grad()
         q_loss.backward()
@@ -476,11 +476,10 @@ class AlgoTrainer(BaseAlgo):
         results = ([self.test_one_trail(env) for _ in range(number_runs)])
         rewards = [result[0] for result in results]
         episode_lengths = [result[1] for result in results]
-        belief_0th = [result[2] for result in results]
-        belief_10th = [result[3] for result in results]
-        belief_49th = [result[4] for result in results]
-        belief_99th = [result[5] for result in results]
-        belief_last = [result[6] for result in results]
+        belief_10th = [result[2] for result in results]
+        belief_49th = [result[3] for result in results]
+        belief_99th = [result[4] for result in results]
+        belief_last = [result[5] for result in results]
 
         rew_mean = np.mean(rewards)
         len_mean = np.mean(episode_lengths)
@@ -489,7 +488,6 @@ class AlgoTrainer(BaseAlgo):
         res["Reward_Mean_Env"] = rew_mean
         res["Eval_normalized_score"] = env.get_normalized_score(rew_mean)
         res["Length_Mean_Env"] = len_mean
-        res["0th_Belief_Max"] = np.mean(belief_0th)
         res["10th_Belief_Max"] = np.mean(belief_10th)
         res["49th_Belief_Max"] = np.mean(belief_49th)
         res["99th_Belief_Max"] = np.mean(belief_99th)
@@ -507,7 +505,7 @@ class AlgoTrainer(BaseAlgo):
             lengths = 0
             state = state[np.newaxis]
             state = torch.from_numpy(state).float().to(self.device)
-            belief = init_belief = self.get_adv_belief(state)
+            belief = torch.ones((1,self.args['transition_select_num'])).to(self.device) / self.args['transition_select_num']
             belief_10th = belief_50th = belief_100th = belief_last = 1. / self.args['transition_select_num']
             while not done:
                 # hidden = (hidden_policy, lst_action)
@@ -529,7 +527,7 @@ class AlgoTrainer(BaseAlgo):
                     belief_100th = belief.max().item()
                 elif done:
                     belief_last = belief.max().item()
-        return (rewards, lengths, init_belief.max().item(), belief_10th, belief_50th, belief_100th, belief_last)
+        return (rewards, lengths, belief_10th, belief_50th, belief_100th, belief_last)
     
     @torch.no_grad()
     def belief_update(self, belief, state=None, action=None ,next_state=None, reward=None, log_prob=None):

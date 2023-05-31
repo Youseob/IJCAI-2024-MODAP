@@ -117,7 +117,6 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
                                                                torch.from_numpy(lst_actions).to(device), torch.IntTensor(traj_lens_it))
             max_len = max(traj_lens_it)
             
-            import ipdb; ipdb.set_trace()
             policy_hidden = np.concatenate((np.zeros((len(traj_lens_it), 1, policy_hidden_out.shape[-1]), dtype=np.float32),
                                             policy_hidden_out[:, :-1].cpu().detach().numpy()), axis=-2) # 
             value_hidden = np.concatenate((np.zeros((len(traj_lens_it), 1, value_hidden_out.shape[-1]), dtype=np.float32),

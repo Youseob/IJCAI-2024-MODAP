@@ -23,7 +23,7 @@ rollout_batch_size = 10000
 traj_num_to_infer = 1000
 uniform_rollout = False
 
-out_train_epoch = 5000
+out_train_epoch = 2000
 in_train_epoch = 200
 
 train_batch_size = 256              # train policy num of trajectories
@@ -44,7 +44,7 @@ transition_select_num = 20
 transition_epoch = None
 mode = 'normalize' # 'normalize', 'local', 'noRes'
 
-real_data_ratio = 0.0 # 0.05
+real_data_ratio = 0.05
 transition_batch_size = 256
 policy_batch_size = 256
 data_collection_per_epoch = 50e3
@@ -58,15 +58,13 @@ critic_lr = 3e-4
 discount = 0.99
 soft_target_tau = 5e-3
 
-horizon = 10
-# vessl exp 2022/03/06
-calibration = True
-add_value_to_rt = True
-reward_scale = 0.1
-b_lr = 1e-4
-# b_update_epoch = 5
+horizon = 5
+# vessl exp 2022/04/11
+calibration = False
+add_value_to_rt = False
 belief_update_mode = 'bay' # 'bay', 'softmax', 'kl-reg'
-temp = 10 
+q_lambda = 10
+# temp = 10 
 
 #tune
 # params_tune = {

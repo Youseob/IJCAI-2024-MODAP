@@ -322,9 +322,12 @@ class AlgoTrainer(BaseAlgo):
         self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
         
         mi = traj_log_probs[model_indexes, np.arange(rollout_batch_size)]
-        mi -= torch.log(torch.exp(traj_log_probs).sum(0) / num_dynamics) # num_dynamics, rollout_batch_size
-        
-        return {"MI" : mi.mean().item()}
+        mi -= torch.log(torch.exp(traj_log_probs.double()).sum(0) / num_dynamics) # num_dynamics, rollout_batch_size
+        mask = ~torch.isinf(mi)
+        mi[mi==float("inf")] = 0
+        mi_mean = mi.sum() / mask.sum()
+        print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
+        return {"MI" : mi_mean.item(), "ratio" : mask.sum() / rollout_batch_size}
 
     @torch.no_grad()
     def eval_rollout_model(self, rollout_batch_size, deterministic=True):

@@ -22,8 +22,8 @@ rollout_batch_size = 50000
 # handle_per_round = 400
 
 # epoch
-out_epochs = 1000
-poicy_train_epochs = 1000
+out_epochs = 500
+policy_train_epochs = 1000
 model_retrain_epochs = 1000 
 epoch_per_div_update = 1
 
@@ -63,7 +63,8 @@ discount = 0.99
 soft_target_tau = 5e-3
 
 horizon = 10
-lam = 0.25
+save_path = None
+# lam = 0.25
 
 # penalty_clip = 40
 mode = 'normalize' # 'normalize', 'local', 'noRes'

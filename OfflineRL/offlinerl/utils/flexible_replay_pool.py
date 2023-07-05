@@ -80,8 +80,6 @@ class FlexibleReplayPool(ReplayPool):
                 import traceback
                 traceback.print_exc(limit=10)
                 print('[ DEBUG ] errors occurs: {}'.format(e))
-
-                import pdb; pdb.set_trace()
         self._advance(num_samples)
 
     def restore_samples(self, samples):

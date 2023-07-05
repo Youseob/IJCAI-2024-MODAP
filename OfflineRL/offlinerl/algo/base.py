@@ -64,7 +64,7 @@ class BaseAlgo(ABC):
         for o, n in zip(net_target.parameters(), net.parameters()):
             o.data.copy_(o.data * (1.0 - soft_target_tau) + n.data * soft_target_tau)
     
-    @abstractmethod
+    # @abstractmethod
     def get_policy(self,):
         pass
     

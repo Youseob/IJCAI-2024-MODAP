@@ -205,6 +205,7 @@ class SimpleReplayTrajPool(FlexibleReplayPool):
                 data[ind] = self.fields[field][item[0], item[1]]
             batch[field] = data
         return batch
+    
     def batch_by_indices(self,
                          indices,
                          field_name_filter=None,

@@ -75,7 +75,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project="704"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project="20230705-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -99,28 +99,28 @@ class AlgoTrainer(BaseAlgo):
         self.obs_space = args['obs_space']
         self.action_space = args['action_space']
 
-        self.args['buffer_size'] = int(self.args['data_collection_per_epoch']) * self.args['horizon'] * 5
+        # self.args['buffer_size'] = int(self.args['data_collection_per_epoch']) * self.args['horizon'] * 5
         self.args['target_entropy'] = - self.args['action_shape']
         self.args['model_pool_size'] = int(args['model_pool_size'])
 
-        print(f"[ DEBUG ] exp_name {self.args['exp_name']}")
+        print(f"[ DEBUG ] exp_name: {self.args['exp_name']}")
 
     def train(self, train_buffer, val_buffer, callback_fn):
         
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
         
-        # if self.args['dynamics_path'] is not None:
-        #     ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
-        #     self.transition = ckpt["model"].to(self.device)
-        #     print("[ DEBUG ] load state dict model done")
-        #     # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
-        # else:
-        #     self.train_transition(train_buffer)
-        #     if self.args['dynamics_save_path'] is not None: 
-        #         torch.save({'model': self.transition, 'optim': self.transition_optim}, self.args['dynamics_save_path'])
+        if self.args['dynamics_path'] is not None:
+            ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
+            self.transition = ckpt["model"].to(self.device)
+            print("[ DEBUG ] load state dict model done")
+            # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
+        else:
+            self.train_transition(train_buffer)
+            if self.args['dynamics_save_path'] is not None: 
+                torch.save({'model': self.transition, 'optim': self.transition_optim}, self.args['dynamics_save_path'])
         
-        # if self.args['only_dynamics']:
-        #     return
+        if self.args['only_dynamics']:
+            return
         
         # self.transition.requires_grad_(False)
 
@@ -128,7 +128,7 @@ class AlgoTrainer(BaseAlgo):
         self.env_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
                                              self.args['lstm_hidden_unit'], env_pool_size)
         self.model_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
-                                               self.args['lstm_hidden_unit'],self.args['model_pool_size'])
+                                               self.args['lstm_hidden_unit'], self.args['model_pool_size'])
 
         loader.restore_pool_d4rl(self.env_pool, self.args['data_name'],adapt=True,\
                                  maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
@@ -172,7 +172,7 @@ class AlgoTrainer(BaseAlgo):
                     policy_log[k] /= self.args['policy_train_epochs']
                 
                 # evaluate in mujoco
-                eval_res = self.eval_policy(self.args["number_runs_eal"])
+                eval_res = self.eval_policy(self.args["number_runs_eval"])
                 policy_log.update(eval_res)
                 self.log_res(epoch, policy_log)
             
@@ -195,8 +195,10 @@ class AlgoTrainer(BaseAlgo):
                     model_log[key] /= self.args["model_retrain_epochs"]
                 model_retrain_epoch += 1
                 self.log_res(model_retrain_epoch, model_log)
-
-
+        
+        if self.args["save_path"] is not None:
+            torch.save({'actor': self.actor, 'q1': self.q1, 'q2': self.q2, 'model': self.transition}, self.args['save_path'])
+        
     def _get_train_policy_batch(self, batch_size=None):
         batch_size = batch_size or self.args['train_batch_size']
         env_batch_size = int(batch_size * self.args['real_data_ratio'])
@@ -407,7 +409,7 @@ class AlgoTrainer(BaseAlgo):
         if self.args['learnable_alpha']:
             # update alpha
             alpha_loss = -torch.sum(self.log_alpha * ((log_p_act_now + \
-                                                         self.args['target_entropy'])*batch['valid']).detach())/valid_num
+                                                         self.args['target_entropy']) * batch['valid']).detach())/valid_num
             self.log_alpha_optim.zero_grad()
             alpha_loss.backward()
             self.log_alpha_optim.step()
@@ -428,8 +430,8 @@ class AlgoTrainer(BaseAlgo):
         return res
 
     def retrain_transition(self):
-        div_loss = self._dynamics_diversity_loss(self, self.args["div_rollout_batch_size"], deterministic=False)
-        mle_loss = self._dynamics_mle_loss(self, self.args["mle_batch_size"])
+        div_loss = self._dynamics_diversity_loss(self.args["div_rollout_batch_size"], deterministic=False)
+        mle_loss = self._dynamics_mle_loss(self.args["mle_batch_size"])
         loss = self.args["diversity_weight"] * div_loss +  mle_loss
         
         self.div_transition_optim.zero_grad()
@@ -437,7 +439,7 @@ class AlgoTrainer(BaseAlgo):
         self.div_transition_optim.step()
         
         return {
-            "Model_Train/mle_loss": mle_loss.cpu().itme(),
+            "Model_Train/mle_loss": mle_loss.cpu().item(),
             "Model_Train/div_loss": div_loss.cpu().item()
             }
     
@@ -462,10 +464,10 @@ class AlgoTrainer(BaseAlgo):
 
     def _dynamics_mle_loss(self, batch_size):
         batch = self.env_pool.random_batch_for_initial(batch_size)
-        obs = batch['observations']
-        act = batch['actions']
-        obs_next = batch["next_observations"]
-        reward = batch['rewards']
+        obs = torch.from_numpy(batch['observations']).to(self.device)
+        act = torch.from_numpy(batch['actions']).to(self.device)
+        obs_next = torch.from_numpy(batch["next_observations"]).to(self.device)
+        reward = torch.from_numpy(batch['rewards']).to(self.device)
         dist = self.transition(torch.cat([obs, act], dim=-1))
         loss = - dist.log_prob(torch.cat([obs_next, reward], dim=-1))
         loss = loss.sum()
@@ -496,23 +498,23 @@ class AlgoTrainer(BaseAlgo):
             next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim + 1)
             next_obs = next_obses[model_indexes, np.arange(rollout_batch_size)] # rollout_batch_size, obs_dim + 1
             ##########################
-            import pdb; pdb.set_trace()
+            ################ORDER Check!!!!!
             traj_log_probs += next_obs_dists.log_prob(next_obs)[:, :, :-1].sum(-1) # num_dynamics, rollout_batch_size
-            next_obs = torch.clamp(next_obs[:, :, :-1], obs_min, obs_max)
+            next_obs = torch.clamp(next_obs[:, :-1], obs_min, obs_max)
             obs = next_obs
             lst_action = act
             hidden = (hidden_policy, lst_action)
         
         # log p(\tau_i | m_i)
         div_term = traj_log_probs[model_indexes, np.arange(rollout_batch_size)]
-        const = torch.tensor( 1. / num_dynamics).float().to(self.device)
+        const = torch.tensor( 1./num_dynamics).float().to(self.device)
         # \sum_m p(m)p(\tau_i | m)
         div_term -= torch.logsumexp(traj_log_probs + torch.log(const) , 0) # rollout_batch_size
         
         mask = ~torch.isinf(div_term)
         div_term[div_term==float("inf")] = 0
         mi_mean = div_term.sum() / mask.sum()
-        print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
+        # print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
         return -mi_mean 
     
     def _eval_transition(self, transition, valdata, inc_var_loss=True):

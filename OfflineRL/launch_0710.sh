@@ -17,5 +17,5 @@ python examples/train_d4rl.py --algo_name=maple_div_v1 \
                               --reward_type=$reward_type \
                               --lam=$lam \
                               --diversity_weight=$weight \
-                              --save_path=/output/maple-$num_model-model-$H-H-$weight-dw-$seed.ckpt.th \
+                              --save_path=/output/div-$num_model-model-$H-H-$weight-dw-$seed.ckpt.th \
                               --seed=$seed

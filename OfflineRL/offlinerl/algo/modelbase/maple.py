@@ -149,7 +149,6 @@ class AlgoTrainer(BaseAlgo):
         # log
         policy_log = {}
         epoch = 0
-        model_retrain_epoch = 0
         for out_epoch in range(self.args['out_epochs']):
             # train policy
             for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):

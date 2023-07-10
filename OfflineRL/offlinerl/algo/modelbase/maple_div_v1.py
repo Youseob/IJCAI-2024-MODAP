@@ -315,9 +315,9 @@ class AlgoTrainer(BaseAlgo):
                 aleatoric_uncertainty = torch.max(torch.norm(rewards_scale, dim=-1, keepdim=True), dim=0)[0] # rollout_batch, 1
                 uncertainty = disagreement_uncertainty if self.args['uncertainty_mode'] == 'disagreement' else aleatoric_uncertainty
                 uncertainty = torch.clamp(uncertainty, max=self.args['penalty_clip'])
-                reward = rewards[model_indexes, np.range(rollout_batch_size)] # rollout_batch, 1
+                reward = rewards[model_indexes, np.arange(rollout_batch_size)] # rollout_batch, 1
             
-            next_obs = next_obses[model_indexes, rollout_batch_size]
+            next_obs = next_obses[model_indexes, np.arange(rollout_batch_size)]
             term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
             next_obs = torch.clamp(next_obs, self.obs_min, self.obs_max)
 

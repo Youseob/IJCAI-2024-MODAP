@@ -109,18 +109,18 @@ class AlgoTrainer(BaseAlgo):
         
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
         
-        if self.args['dynamics_path'] is not None:
-            ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
-            self.transition = ckpt["model"].to(self.device)
-            print("[ DEBUG ] load state dict model done")
-            # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
-        else:
-            self.train_transition(train_buffer)
-            if self.args['dynamics_save_path'] is not None: 
-                torch.save({'model': self.transition, 'optim': self.transition_optim}, self.args['dynamics_save_path'])
+        # if self.args['dynamics_path'] is not None:
+        #     ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
+        #     self.transition = ckpt["model"].to(self.device)
+        #     print("[ DEBUG ] load state dict model done")
+        #     # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
+        # else:
+        #     self.train_transition(train_buffer)
+        #     if self.args['dynamics_save_path'] is not None: 
+        #         torch.save({'model': self.transition, 'optim': self.transition_optim}, self.args['dynamics_save_path'])
         
-        if self.args['only_dynamics']:
-            return
+        # if self.args['only_dynamics']:
+        #     return
         
         env_pool_size = int((train_buffer.shape[0] / self.args['horizon']) * 1.2)
         self.env_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
@@ -139,8 +139,8 @@ class AlgoTrainer(BaseAlgo):
         soft_expanding = expert_range * 0.05
         self.obs_max += soft_expanding
         self.obs_min -= soft_expanding
-        self.obs_max = np.maximum(self.obs_max, 100)
-        self.obs_min = np.minimum(self.obs_min, -100)
+        self.obs_max = torch.from_numpy(np.maximum(self.obs_max, 100)).float().to(self.device)
+        self.obs_min = torch.from_numpy(np.minimum(self.obs_min, -100)).float().to(self.device)
 
         self.rew_max = train_buffer['rew'].max()
         self.rew_min = train_buffer['rew'].min() - self.args['penalty_clip'] * self.args['lam']

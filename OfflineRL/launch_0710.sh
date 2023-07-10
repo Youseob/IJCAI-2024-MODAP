@@ -7,7 +7,7 @@
 # reward_type=penalized_reward
 # lam=0.25
 python examples/train_d4rl.py --algo_name=maple_div_v1 \
-                              --exp_name=maple-$num_model-model-$H-H-$weight-dw-$seed \
+                              --exp_name=maple-$num_model-model-$H-H-$weight-dw-$reward_type-$lam \
                               --task=d4rl-$dataset-v2 \
                               --transition_init_num=$num_model \
                               --transition_select_num=$num_model \

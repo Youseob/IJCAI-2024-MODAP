@@ -75,7 +75,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project="20230705-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project="20230710-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -348,11 +348,13 @@ class AlgoTrainer(BaseAlgo):
         self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
         
         mi = traj_log_probs[model_indexes, np.arange(rollout_batch_size)]
-        mi -= torch.log(torch.exp(traj_log_probs.double()).sum(0) / num_dynamics) # num_dynamics, rollout_batch_size
+        const = torch.tensor( 1./num_dynamics).float().to(self.device)
+        # \sum_m p(m)p(\tau_i | m)
+        mi -= torch.logsumexp(traj_log_probs + torch.log(const) , 0) # rollout_batch_size
         mask = ~torch.isinf(mi)
         mi[mi==float("inf")] = 0
         mi_mean = mi.sum() / mask.sum()
-        print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
+        # print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
         return {"Rollout/MI" : mi_mean.item(), "Rollout/ratio" : mask.sum() / rollout_batch_size}
 
     def train_policy(self, batch):
@@ -513,9 +515,10 @@ class AlgoTrainer(BaseAlgo):
         
         mask = ~torch.isinf(div_term)
         div_term[div_term==float("inf")] = 0
-        mi_mean = div_term.sum() / mask.sum()
+        # mi_mean = div_term.sum() / mask.sum()
+        mi_loss = -div_term.sum()
         # print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
-        return -mi_mean 
+        return mi_loss 
     
     def _eval_transition(self, transition, valdata, inc_var_loss=True):
         with torch.no_grad():

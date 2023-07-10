@@ -310,12 +310,13 @@ class AlgoTrainer(BaseAlgo):
             if self.args["reward_type"] == "mean_reward" : # self.args["lam"]
                 reward = rewards_mean.mean(0) # rollbout_batch , 1
             elif self.args["reward_type"] == "penalized_reward":
-                diff = rewards_mean - rewards_mean.mean(0) # num_dynamics, rollout_batch, 1
-                disagreement_uncertainty = torch.max(torch.norm(diff, dim=-1, keepdim=True), dim=0)[0] # rollout_batch, 1
-                aleatoric_uncertainty = torch.max(torch.norm(rewards_scale, dim=-1, keepdim=True), dim=0)[0] # rollout_batch, 1
-                uncertainty = disagreement_uncertainty if self.args['uncertainty_mode'] == 'disagreement' else aleatoric_uncertainty
-                uncertainty = torch.clamp(uncertainty, max=self.args['penalty_clip'])
                 reward = rewards[model_indexes, np.arange(rollout_batch_size)] # rollout_batch, 1
+            
+            diff = rewards_mean - rewards_mean.mean(0) # num_dynamics, rollout_batch, 1
+            disagreement_uncertainty = torch.max(torch.norm(diff, dim=-1, keepdim=True), dim=0)[0] # rollout_batch, 1
+            aleatoric_uncertainty = torch.max(torch.norm(rewards_scale, dim=-1, keepdim=True), dim=0)[0] # rollout_batch, 1
+            uncertainty = disagreement_uncertainty if self.args['uncertainty_mode'] == 'disagreement' else aleatoric_uncertainty
+            uncertainty = torch.clamp(uncertainty, max=self.args['penalty_clip'])
             
             next_obs = next_obses[model_indexes, np.arange(rollout_batch_size)]
             term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])

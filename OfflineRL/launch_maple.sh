@@ -1,14 +1,19 @@
 #!/bin/bash
-# dataset=halfcheetah-medium
+# dataset=hopper-medium-replay
+# init_num_model=7
 # num_model=5
 # seed=42
 # H=5
+# reward_type=penalized_reward
+# lam=0.2
 python examples/train_d4rl.py --algo_name=maple \
-                              --exp_name=maple-$num_model-mode-$seed \
+                              --exp_name=maple-$num_model-model-$H-H-$reward_type-$lam \
                               --task=d4rl-$dataset-v2 \
-                              --transition_init_num=$num_model \
+                              --transition_init_num=$init_num_model \
                               --transition_select_num=$num_model \
-                              --dynamics_save_path=/output/$dataset-$num_model-seed-$seed.th \
+                              --dynamics_save_path=/output/$dataset-$num_model-$seed-ckpt.th \
                               --save_path=/output/$dataset-$num_model-$seed-ckpt.th \
                               --horizon=$H \
+                              --reward_type=$reward_type \
+                              --lam=$lam \
                               --seed=$seed

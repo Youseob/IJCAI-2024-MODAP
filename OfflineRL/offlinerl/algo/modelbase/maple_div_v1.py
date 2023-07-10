@@ -108,19 +108,18 @@ class AlgoTrainer(BaseAlgo):
     def train(self, train_buffer, val_buffer, callback_fn):
         
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
+        if self.args['dynamics_path'] is not None:
+            ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
+            self.transition = ckpt["model"].to(self.device)
+            print("[ DEBUG ] load state dict model done")
+            # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
+        else:
+            self.train_transition(train_buffer)
+            if self.args['dynamics_save_path'] is not None: 
+                torch.save({'model': self.transition, 'optim': self.transition_optim}, self.args['dynamics_save_path'])
         
-        # if self.args['dynamics_path'] is not None:
-        #     ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
-        #     self.transition = ckpt["model"].to(self.device)
-        #     print("[ DEBUG ] load state dict model done")
-        #     # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
-        # else:
-        #     self.train_transition(train_buffer)
-        #     if self.args['dynamics_save_path'] is not None: 
-        #         torch.save({'model': self.transition, 'optim': self.transition_optim}, self.args['dynamics_save_path'])
-        
-        # if self.args['only_dynamics']:
-        #     return
+        if self.args['only_dynamics']:
+            return
         
         env_pool_size = int((train_buffer.shape[0] / self.args['horizon']) * 1.2)
         self.env_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
@@ -319,10 +318,10 @@ class AlgoTrainer(BaseAlgo):
             uncertainty = torch.clamp(uncertainty, max=self.args['penalty_clip'])
             
             next_obs = next_obses[model_indexes, np.arange(rollout_batch_size)]
+            traj_log_probs += next_obs_dists.log_prob(torch.cat([next_obs, reward], dim=-1))[:, :, :-1].sum(-1) # num_dynamics, rollout_batch_size
             term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
             next_obs = torch.clamp(next_obs, self.obs_min, self.obs_max)
 
-            traj_log_probs += next_obs_dists.log_prob(torch.cat([next_obs, reward], dim=-1))[:, :, :-1].sum(-1) # num_dynamics, rollout_batch_size
             reward = torch.clamp(reward, self.rew_min, self.rew_max)
             penalized_reward = reward - self.args['lam'] * uncertainty
 
@@ -343,6 +342,7 @@ class AlgoTrainer(BaseAlgo):
             obs = next_obs
             lst_action = act
             hidden = (hidden_policy, lst_action)
+            
         self.model_pool._pointer += num_samples
         self.model_pool._pointer %= self.model_pool._max_size
         self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
@@ -354,29 +354,30 @@ class AlgoTrainer(BaseAlgo):
         mask = ~torch.isinf(mi)
         mi[mi==float("inf")] = 0
         mi_mean = mi.sum() / mask.sum()
-        # print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
+        print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
         return {"Rollout/MI" : mi_mean.item(), "Rollout/ratio" : mask.sum() / rollout_batch_size}
 
     def train_policy(self, batch):
+        ################################################################
         batch['valid'] = batch['valid'].astype(int)
-        lens = np.sum(batch['valid'], axis=1).squeeze(-1)
+        lens = np.sum(batch['valid'], axis=1).squeeze(-1) # (batch_size)
         max_len = np.max(lens)
         for k in batch:
             batch[k] = torch.from_numpy(batch[k][: ,:max_len]).to(self.device)
         value_hidden = batch['value_hidden'][ :, 0]
         policy_hidden = batch['policy_hidden'][ :, 0]
-        value_state = self.value_gru(batch['observations'], batch['last_actions'], value_hidden, lens)
-        policy_state = self.policy_gru(batch['observations'], batch['last_actions'], policy_hidden, lens)
-        lens_next = torch.ones(len(lens)).int()
-        next_value_hidden = value_state[:,-1]
-        next_policy_hidden = policy_state[:,-1]
+        value_state = self.value_gru(batch['observations'], batch['last_actions'], value_hidden, lens) # (batch_size, H, dim)
+        policy_state = self.policy_gru(batch['observations'], batch['last_actions'], policy_hidden, lens) # (batch_size, H, dim)
+        lens_next = torch.ones(len(lens)).int() # batch_size
+        next_value_hidden = value_state[:,-1] # batch_size, dim
+        next_policy_hidden = policy_state[:,-1] # batch_size, dim
         value_state_next = self.value_gru(batch['next_observations'][:,-1:], \
-                                          batch['actions'][:,-1:],next_value_hidden,lens_next)
+                                          batch['last_actions'][:,-1:],next_value_hidden,lens_next) # (batch_size, 1, dim)
         policy_state_next = self.policy_gru(batch['next_observations'][:,-1:],\
-                                            batch['actions'][:,-1:], next_policy_hidden, lens_next)
+                                            batch['last_actions'][:,-1:], next_policy_hidden, lens_next) # (batch_size, 1, dim)
 
-        value_state_next = torch.cat([value_state[:,1:],value_state_next],dim=1)
-        policy_state_next = torch.cat([policy_state[:,1:],policy_state_next],dim=1)
+        value_state_next = torch.cat([value_state[:,1:],value_state_next],dim=1) # (batch_size, H, dim)
+        policy_state_next = torch.cat([policy_state[:,1:],policy_state_next],dim=1) # (batch_size, H, dim)
 
         q1 = self.q1(value_state, batch['actions'], batch['observations'])
         q2 = self.q2(value_state, batch['actions'], batch['observations'])
@@ -477,7 +478,7 @@ class AlgoTrainer(BaseAlgo):
         loss += 0.01 * (2. * self.transition.max_logstd).sum() - 0.01 * (2. * self.transition.min_logstd).sum()
         return loss
     
-    def _dynamics_diversity_loss(self, rollout_batch_size, deterministic=False):
+    def _dynamics_diversity_loss(self, rollout_batch_size, deterministic=True):
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
         num_dynamics = self.args["transition_select_num"]
         
@@ -498,18 +499,18 @@ class AlgoTrainer(BaseAlgo):
             obs_action = torch.cat([obs, act], dim=-1) # (rollout_batch_size, 18)
             next_obs_dists = self.transition(obs_action)
             next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim + 1)
+            
             next_obs = next_obses[model_indexes, np.arange(rollout_batch_size)] # rollout_batch_size, obs_dim + 1
-            ##########################
-            ################ORDER Check!!!!!
             traj_log_probs += next_obs_dists.log_prob(next_obs)[:, :, :-1].sum(-1) # num_dynamics, rollout_batch_size
             next_obs = torch.clamp(next_obs[:, :-1], obs_min, obs_max)
+            
             obs = next_obs
             lst_action = act
             hidden = (hidden_policy, lst_action)
         
         # log p(\tau_i | m_i)
         div_term = traj_log_probs[model_indexes, np.arange(rollout_batch_size)]
-        const = torch.tensor( 1./num_dynamics).float().to(self.device)
+        const = torch.tensor(1./num_dynamics).float().to(self.device)
         # \sum_m p(m)p(\tau_i | m)
         div_term -= torch.logsumexp(traj_log_probs + torch.log(const) , 0) # rollout_batch_size
         

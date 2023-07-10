@@ -19,11 +19,13 @@ value_hidden_sizes=(256,256)
 hidden_sizes=(16,)
 model_pool_size = 250000
 rollout_batch_size = 50000
-handle_per_round = 400
-out_train_epoch = 1000
-in_train_epoch = 1000 
+# handle_per_round = 400
 
-train_batch_size = 256              # train policy num of trajectories
+# epoch
+out_epochs = 500
+policy_train_epochs = 1000
+model_retrain_epochs = 1000 
+epoch_per_div_update = 1
 
 number_runs_eval = 10            # evaluation epochs in mujoco 
 
@@ -39,13 +41,12 @@ transition_layers = 4
 transition_init_num = 20
 transition_select_num = 14
 
+transition_batch_size = 256
+train_batch_size = 256              # train policy num of trajectories
 real_data_ratio = 0.05
 
-transition_batch_size = 256
-policy_batch_size = 256
-data_collection_per_epoch = 50e3
-steps_per_epoch = 1000
-max_epoch = 1000
+# policy_batch_size = 256
+# data_collection_per_epoch = 50e3
 
 learnable_alpha = True
 uncertainty_mode = 'aleatoric'
@@ -56,23 +57,24 @@ discount = 0.99
 soft_target_tau = 5e-3
 
 horizon = 10
+reward_type = 'mean_reward' # or "mean_reward"
 lam = 0.25
-
-penalty_clip = 40
+penalty_clip = 40 
 mode = 'normalize' # 'normalize', 'local', 'noRes'
+save_path = None
 
 #tune
-params_tune = {
-    "buffer_size" : {"type" : "discrete", "value": [1e6, 2e6]},
-    "real_data_ratio" : {"type" : "discrete", "value": [0.05, 0.1, 0.2]},
-    "horzion" : {"type" : "discrete", "value": [1, 2, 5]},
-    "lam" : {"type" : "continuous", "value": [0.1, 10]},
-    "learnable_alpha" : {"type" : "discrete", "value": [True, False]},
-}
+# params_tune = {
+#     "buffer_size" : {"type" : "discrete", "value": [1e6, 2e6]},
+#     "real_data_ratio" : {"type" : "discrete", "value": [0.05, 0.1, 0.2]},
+#     "horzion" : {"type" : "discrete", "value": [1, 2, 5]},
+#     "lam" : {"type" : "continuous", "value": [0.1, 10]},
+#     "learnable_alpha" : {"type" : "discrete", "value": [True, False]},
+# }
 
-#tune
-grid_tune = {
-    "horizon" : [1, 5],
-    "lam" : [0.5, 1, 2, 5],
-    "uncertainty_mode" : ['aleatoric', 'disagreement'],
-}
+# #tune
+# grid_tune = {
+#     "horizon" : [1, 5],
+#     "lam" : [0.5, 1, 2, 5],
+#     "uncertainty_mode" : ['aleatoric', 'disagreement'],
+# }

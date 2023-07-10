@@ -27,7 +27,7 @@ policy_train_epochs = 1000
 model_retrain_epochs = 1000 
 epoch_per_div_update = 1
 
-number_runs_eval = 40            # evaluation epochs in mujoco 
+number_runs_eval = 10            # evaluation epochs in mujoco 
 
 #-------------
 dynamics_path = None

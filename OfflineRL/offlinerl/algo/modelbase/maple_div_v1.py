@@ -75,7 +75,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project="20230710-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project="20230711-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -181,7 +181,7 @@ class AlgoTrainer(BaseAlgo):
                     torch.cuda.empty_cache()
             
             # train dynamics
-            while model_retrain_epoch < epoch:
+            while model_retrain_epoch < self.args["div_update_ratio"] * epoch:
                 model_log["Model_Train/mle_loss"] = 0
                 model_log["Model_Train/div_loss"] = 0
                 for _ in range(self.args["model_retrain_epochs"]):

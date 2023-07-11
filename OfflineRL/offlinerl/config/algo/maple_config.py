@@ -25,8 +25,6 @@ rollout_batch_size = 50000
 out_epochs = 500
 policy_train_epochs = 1000
 model_retrain_epochs = 1000 
-epoch_per_div_update = 1
-
 number_runs_eval = 10            # evaluation epochs in mujoco 
 
 #-------------

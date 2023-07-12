@@ -337,7 +337,8 @@ class AlgoTrainer(BaseAlgo):
                 lst_action = act
                 hidden = (hidden_policy, lst_action)
             
-        worst_num_traj = int(self.args['N'] * self.args["worst_percentil"])
+        # worst_num_traj = int(self.args['N'] * self.args["worst_percentil"])
+        worst_num_traj = 1
         worst_x_ind = np.arange(rollout_batch_size).repeat(worst_num_traj)
         worst_y_in = np.argsort(sum_reward, axis=1)[:, :worst_num_traj, :].reshape(-1) # rollout_batch_size, N*portion, 1 --> rollout_batch_size * N * portion, 
         

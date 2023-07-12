@@ -6,16 +6,16 @@
 # H=5
 # weight=0.1
 # reward_type=sample_reward
-
+# N=5
 python examples/train_d4rl.py --algo_name=maple_div_v2 \
-                              --exp_name=div-$num_model-model-$H-H-$weight-dw-$reward_type-$lam \
+                              --exp_name=div-$num_model-model-$H-H-$weight-dw-$reward_type-N-$N \
                               --task=d4rl-$dataset-v2 \
                               --transition_init_num=$init_num_model \
                               --transition_select_num=$num_model \
                               --dynamics_save_path=/output/$dataset-$num_model-$seed-ckpt.th \
                               --horizon=$H \
+                              --N=$N \
                               --reward_type=$reward_type \
-                              --lam=$lam \
                               --diversity_weight=$weight \
                               --save_path=/output/div-$num_model-model-$H-H-$weight-dw-$seed.ckpt.th \
                               --seed=$seed

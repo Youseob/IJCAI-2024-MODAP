@@ -180,7 +180,9 @@ class AlgoTrainer(BaseAlgo):
                 torch.cuda.empty_cache()
             self.log_res(out_epoch, policy_log)
             # train dynamics
-            while model_retrain_epoch < self.args["div_update_ratio"] * epoch:
+            # while model_retrain_epoch < self.args["div_update_ratio"] * epoch:
+            # {epoch_per_div_update, div_update_ratio} = {2, 0.5}, {4, 0.25}, {5, 0.2} 
+            if True:
                 model_log["Model_Train/mle_loss"] = 0
                 model_log["Model_Train/div_loss"] = 0
                 for _ in range(self.args["model_retrain_epochs"]):

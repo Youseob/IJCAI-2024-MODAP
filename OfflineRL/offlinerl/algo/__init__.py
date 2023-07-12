@@ -13,8 +13,8 @@ from offlinerl.algo.modelfree import cql, plas, bcqd, bcq, bc, crr
 from offlinerl.algo.modelbase import mopo, moose, combo, bremen, maple, bayrl, bayrl_cvar, model_analysis, bayrl_calib,\
                                     adv_bayrl, adv_bayrl_v2, adv_bayrl_v3, pessimistic_bayrl, bayrl_v2, pessimistic_bayrl_v2
 
-from offlinerl.algo.modelbase import maple_div_v1
-from offlinerl.config.algo import maple_div_config, maple_div_v1_config
+from offlinerl.algo.modelbase import maple_div_v1, maple_div_v2
+from offlinerl.config.algo import maple_div_config, maple_div_v1_config, maple_div_v2_config
 
 algo_dict = {
     'bc' : {"algo" : bc, "config" : bc_config},
@@ -40,7 +40,7 @@ algo_dict = {
     'bayrl_v2' : {'algo' : bayrl_v2, 'config': bayrl_v2_config},
     # 'maple_div': {'algo': maple , 'config':maple_div_config},
     'maple_div_v1': {'algo': maple_div_v1 , 'config':maple_div_v1_config},
-    
+    'maple_div_v2': {'algo': maple_div_v2, 'config': maple_div_v2_config}
 }
 
 def algo_select(command_args, algo_config_module=None):

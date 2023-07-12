@@ -152,8 +152,8 @@ class AlgoTrainer(BaseAlgo):
         for out_epoch in range(self.args['out_epochs']):
             # train policy
             for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):
-                rollout_res = self.rollout_model(self.args['rollout_batch_size'])
-                policy_log.update(rollout_res)
+                self.rollout_model(self.args['rollout_batch_size'])
+                torch.cuda.empty_cache()
                 
                 policy_log["Policy_Train/policy_loss"] = 0
                 policy_log["Policy_Train/q_loss"] = 0
@@ -171,14 +171,16 @@ class AlgoTrainer(BaseAlgo):
                 # evaluate in mujoco
                 eval_res = self.eval_policy(self.args["number_runs_eval"])
                 policy_log.update(eval_res)
+                # self.log_res(epoch, policy_log)
             
                 if epoch % 4 == 0:
                     loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
                                     maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
                                     value_hook=self.value_gru, device=self.device)
-            
                 torch.cuda.empty_cache()
+            
             self.log_res(out_epoch, policy_log)
+            
             # train dynamics
             while model_retrain_epoch < self.args["div_update_ratio"] * epoch:
                 model_log["Model_Train/mle_loss"] = 0
@@ -190,6 +192,7 @@ class AlgoTrainer(BaseAlgo):
                 for key in model_res:
                     model_log[key] /= self.args["model_retrain_epochs"]
                 model_retrain_epoch += 1
+            
             self.log_res(out_epoch, model_log)
         
         if self.args["save_path"] is not None:
@@ -283,80 +286,79 @@ class AlgoTrainer(BaseAlgo):
     def rollout_model(self,rollout_batch_size, deterministic=False):
         batch = self.env_pool.random_batch_for_initial(rollout_batch_size)
         num_dynamics = self.args["transition_select_num"]
-        obs = batch['observations']
-        lst_action = batch['last_actions']
-
-        hidden_value_init = batch['value_hidden']
+        hidden_value_init = batch['value_hidden'] # rollout_batch_size, dim
         hidden_policy_init = batch['policy_hidden']
+        sum_reward = np.zeros((rollout_batch_size, self.args['N'], 1))
 
-        traj_log_probs = torch.zeros(num_dynamics, rollout_batch_size).float().to(self.device)
-        current_nonterm = np.ones((len(obs)), dtype=bool)
-        samples = None
-        obs = torch.from_numpy(obs).to(self.device)
-        lst_action = torch.from_numpy(lst_action).to(self.device)
-        hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)
-        hidden = (hidden_policy, lst_action)
-
-        model_indexes = np.random.randint(0, num_dynamics, size=(obs.shape[0]))
-        for i in range(self.args['horizon']):
-            act, hidden_policy = self.get_meta_action(obs, hidden, deterministic)
-            obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
-            next_obs_dists = self.transition(obs_action)
-            next_obses = next_obs_dists.sample()[:, :, :-1] # (num_dynamics, rollout_batch_size, obs_dim)
-
-            rewards, rewards_mean, rewards_scale = self.transition.saved_forward(obs_action, only_reward=True) # num_dynamics, rollout_batch, 1
-            if self.args["reward_type"] == "mean_reward" : # self.args["lam"]
-                reward = rewards_mean.mean(0) # rollbout_batch , 1
-            elif self.args["reward_type"] == "penalized_reward":
-                reward = rewards[model_indexes, np.arange(rollout_batch_size)] # rollout_batch, 1
-            
-            diff = rewards_mean - rewards_mean.mean(0) # num_dynamics, rollout_batch, 1
-            disagreement_uncertainty = torch.max(torch.norm(diff, dim=-1, keepdim=True), dim=0)[0] # rollout_batch, 1
-            aleatoric_uncertainty = torch.max(torch.norm(rewards_scale, dim=-1, keepdim=True), dim=0)[0] # rollout_batch, 1
-            uncertainty = disagreement_uncertainty if self.args['uncertainty_mode'] == 'disagreement' else aleatoric_uncertainty
-            uncertainty = torch.clamp(uncertainty, max=self.args['penalty_clip'])
-            
-            next_obs = next_obses[model_indexes, np.arange(rollout_batch_size)]
-            traj_log_probs += next_obs_dists.log_prob(torch.cat([next_obs, reward], dim=-1))[:, :, :-1].sum(-1) # num_dynamics, rollout_batch_size
-            term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
-            next_obs = torch.clamp(next_obs, self.obs_min, self.obs_max)
-
-            reward = torch.clamp(reward, self.rew_min, self.rew_max)
-            penalized_reward = reward - self.args['lam'] * uncertainty
-
-            nonterm_mask = ~term.squeeze(-1)
-            #nonterm_mask: 1-not done, 0-done
-            samples = {'observations': obs.cpu().numpy(), 'actions': act.cpu().numpy(), 'next_observations': next_obs.cpu().numpy(),
-                        'rewards': penalized_reward.cpu().numpy(), 'terminals': term,
-                        'last_actions': lst_action.cpu().numpy(),
-                        'valid': current_nonterm.reshape(-1, 1),
-                        'value_hidden': hidden_value_init, 'policy_hidden': hidden_policy_init} 
-            samples = {k: np.expand_dims(v, 1) for k, v in samples.items()}
-            num_samples = samples['observations'].shape[0]
-            index = np.arange(
-                self.model_pool._pointer, self.model_pool._pointer + num_samples) % self.model_pool._max_size
-            for k in samples:
-                self.model_pool.fields[k][index, i] = samples[k][:, 0]
-            current_nonterm = current_nonterm & nonterm_mask
-            obs = next_obs
-            lst_action = act
+        _obs = torch.zeros(rollout_batch_size, self.args['N'], self.args['horizon'], self.obs_space.shape[0]).float().to(self.device)
+        _next_obs = torch.zeros(rollout_batch_size, self.args['N'], self.args['horizon'], self.obs_space.shape[0]).float().to(self.device)
+        _act = torch.zeros(rollout_batch_size, self.args['N'], self.args["horizon"], self.action_space.shape[0]).float().to(self.device)
+        _reward = torch.zeros(rollout_batch_size, self.args['N'], self.args["horizon"], 1).float().to(self.device)
+        _valid = np.zeros((rollout_batch_size, self.args['N'], self.args["horizon"], 1))
+        _term = np.zeros((rollout_batch_size, self.args['N'], self.args["horizon"], 1))
+        
+        for n in range(self.args['N']):
+            model_indexes = np.random.randint(0, num_dynamics, size=(rollout_batch_size))
+            obs = torch.from_numpy(batch['observations']).to(self.device)
+            lst_action = torch.from_numpy(batch['last_actions']).to(self.device)
+            hidden_policy = torch.from_numpy(hidden_policy_init).to(self.device)
             hidden = (hidden_policy, lst_action)
+            current_nonterm = np.ones((len(obs)), dtype=bool)
+            for i in range(self.args['horizon']):
+                act, hidden_policy = self.get_meta_action(obs, hidden, deterministic)
+                obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
+                next_obs_dists = self.transition(obs_action)
+                next_obses = next_obs_dists.sample()[:, :, :-1] # (num_dynamics, rollout_batch_size, obs_dim)
+
+                rewards, rewards_mean, rewards_scale = self.transition.saved_forward(obs_action, only_reward=True) # num_dynamics, rollout_batch, 1
+                if self.args["reward_type"] == "mean_reward" : # self.args["lam"]
+                    reward = rewards_mean.mean(0) # rollbout_batch , 1
+                elif self.args["reward_type"] == "sample_reward":
+                    reward = rewards[model_indexes, np.arange(rollout_batch_size)] # rollout_batch, 1
+
+
+                next_obs = next_obses[model_indexes, np.arange(rollout_batch_size)]
+                term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task'])
+                next_obs = torch.clamp(next_obs, self.obs_min, self.obs_max)
+                reward = torch.clamp(reward, self.rew_min, self.rew_max)
+                sum_reward[:, n] += (self.args["discount"]**i) * reward.cpu().numpy() * current_nonterm.reshape(-1, 1)
+                nonterm_mask = ~term.squeeze(-1)
+                
+                _obs[:, n, i] = obs
+                _next_obs[:, n, i] = next_obs
+                _act[:, n, i] = act                
+                _reward[:, n, i] = reward
+                _term[:, n , i] = term
+                _valid[:, n, i] = current_nonterm.reshape(-1, 1)
+                _term[:, n, i] = term
             
+                current_nonterm = current_nonterm & nonterm_mask
+                obs = next_obs
+                lst_action = act
+                hidden = (hidden_policy, lst_action)
+            
+        worst_num_traj = int(self.args['N'] * self.args["worst_percentil"])
+        worst_x_ind = np.arange(rollout_batch_size).repeat(worst_num_traj)
+        worst_y_in = np.argsort(sum_reward, axis=1)[:, :worst_num_traj, :].reshape(-1) # rollout_batch_size, N*portion, 1 --> rollout_batch_size * N * portion, 
+        
+        num_samples = worst_num_traj * rollout_batch_size
+        index = np.arange(self.model_pool._pointer, self.model_pool._pointer + worst_num_traj * rollout_batch_size) % self.model_pool._max_size
+        self.model_pool.fields["observations"][index] = _obs[worst_x_ind, worst_y_in].cpu().numpy() # roll_bs * wort_num_traj, horizon, dim
+        self.model_pool.fields["actions"][index] = _act[worst_x_ind, worst_y_in].cpu().numpy() # roll_bs * wort_num_traj, horizon, dim
+        self.model_pool.fields["next_observations"][index] = _next_obs[worst_x_ind, worst_y_in].cpu().numpy() # roll_bs * wort_num_traj, horizon, dim
+        self.model_pool.fields["rewards"][index] = _reward[worst_x_ind, worst_y_in].cpu().numpy() # roll_bs * wort_num_traj, horizon, dim
+        self.model_pool.fields["terminals"][index] = _term[worst_x_ind, worst_y_in] # roll_bs *  wort_num_traj, horizon, dim
+        self.model_pool.fields["valid"][index] = _valid[worst_x_ind, worst_y_in] # roll_bs * wort_num_traj, horizon, dim
+        self.model_pool.fields["value_hidden"][index] =  np.tile(hidden_value_init[:, None, :], (worst_num_traj, self.args['horizon'], 1)) # roll_bs * wort_num_traj, horizon, dim
+        self.model_pool.fields["policy_hidden"][index] = np.tile(hidden_policy_init[:, None, :], (worst_num_traj, self.args['horizon'], 1)) # roll_bs * wort_num_traj, horizon, dim
+        
         self.model_pool._pointer += num_samples
         self.model_pool._pointer %= self.model_pool._max_size
         self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
-        
-        mi = traj_log_probs[model_indexes, np.arange(rollout_batch_size)]
-        const = torch.tensor( 1./num_dynamics).float().to(self.device)
-        # \sum_m p(m)p(\tau_i | m)
-        mi -= torch.logsumexp(traj_log_probs + torch.log(const) , 0) # rollout_batch_size
-        mask = ~torch.isinf(mi)
-        mi[mi==float("inf")] = 0
-        mi_mean = mi.sum() / mask.sum()
-        print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
-        return {"Rollout/MI" : mi_mean.item(), "Rollout/ratio" : mask.sum() / rollout_batch_size}
-
+        return
+     
     def train_policy(self, batch):
+        ################################################################
         batch['valid'] = batch['valid'].astype(int)
         lens = np.sum(batch['valid'], axis=1).squeeze(-1) # (batch_size)
         max_len = np.max(lens)

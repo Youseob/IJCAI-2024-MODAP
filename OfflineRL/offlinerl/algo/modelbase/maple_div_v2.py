@@ -173,12 +173,11 @@ class AlgoTrainer(BaseAlgo):
                 policy_log.update(eval_res)
                 # self.log_res(epoch, policy_log)
             
-                if epoch % 4 == 0:
-                    loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
-                                    maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
-                                    value_hook=self.value_gru, device=self.device)
-                torch.cuda.empty_cache()
-            
+                # if epoch % 4 == 0:
+            loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
+                            maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
+                            value_hook=self.value_gru, device=self.device)
+            torch.cuda.empty_cache()
             self.log_res(out_epoch, policy_log)
             
             # train dynamics

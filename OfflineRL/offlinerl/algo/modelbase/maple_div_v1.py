@@ -23,6 +23,7 @@ from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
 from offlinerl.utils import loader
 import uuid
 import wandb
+import pdb
 
 def algo_init(args):
     logger.info('Run algo_init function')
@@ -76,7 +77,7 @@ class AlgoTrainer(BaseAlgo):
         wandb.init(
             config=self.args,
             project="20230712-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
-            group=self.args["algo_name"], # "maple"
+            group="hyperparamerter_tuning" ,#self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
         )
@@ -106,6 +107,14 @@ class AlgoTrainer(BaseAlgo):
         print(f"[ DEBUG ] exp_name: {self.args['exp_name']}")
 
     def train(self, train_buffer, val_buffer, callback_fn):
+        
+        # only eval in mujoco
+        if self.args['only_eval']:
+            ckpt = torch.load(self.args['actor_path'], map_location='cpu')
+            self.actor = ckpt["actor"].to(self.device)
+            self.policy_gru = ckpt['policy_gru'].to(self.device)
+            eval_res = self.eval_policy(self.args["number_runs_eval"])
+            return # exit
         
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
         if self.args['dynamics_path'] is not None:
@@ -151,6 +160,7 @@ class AlgoTrainer(BaseAlgo):
         model_retrain_epoch = 0
         for out_epoch in range(self.args['out_epochs']):
             # train policy
+            self.model_pool._pointer, self.model_pool._size = 0, 0
             for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):
                 rollout_res = self.rollout_model(self.args['rollout_batch_size'])
                 policy_log.update(rollout_res)
@@ -167,18 +177,16 @@ class AlgoTrainer(BaseAlgo):
                 # average policy_res 
                 for k in policy_res:
                     policy_log[k] /= self.args['policy_train_epochs']
-                
-                # evaluate in mujoco
-                eval_res = self.eval_policy(self.args["number_runs_eval"])
-                policy_log.update(eval_res)
-            
                 if epoch % 4 == 0:
                     loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
                                     maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
                                     value_hook=self.value_gru, device=self.device)
             
                 torch.cuda.empty_cache()
+            eval_res = self.eval_policy(self.args["number_runs_eval"])
+            policy_log.update(eval_res)
             self.log_res(out_epoch, policy_log)
+        
             # train dynamics
             # while model_retrain_epoch < self.args["div_update_ratio"] * epoch:
             # {epoch_per_div_update, div_update_ratio} = {2, 0.5}, {4, 0.25}, {5, 0.2} 
@@ -195,7 +203,7 @@ class AlgoTrainer(BaseAlgo):
             self.log_res(out_epoch, model_log)
         
         if self.args["save_path"] is not None:
-            torch.save({'actor': self.actor, 'q1': self.q1, 'q2': self.q2, 'model': self.transition}, self.args['save_path'])
+            torch.save({'policy_gru': self.policy_gru, 'actor': self.actor, 'q1': self.q1, 'q2': self.q2, 'model': self.transition}, self.args['save_path'])
         
     def _get_train_policy_batch(self, batch_size=None):
         batch_size = batch_size or self.args['train_batch_size']
@@ -343,7 +351,7 @@ class AlgoTrainer(BaseAlgo):
             obs = next_obs
             lst_action = act
             hidden = (hidden_policy, lst_action)
-            
+        
         self.model_pool._pointer += num_samples
         self.model_pool._pointer %= self.model_pool._max_size
         self.model_pool._size = min(self.model_pool._max_size, self.model_pool._size + num_samples)
@@ -487,12 +495,9 @@ class AlgoTrainer(BaseAlgo):
         hidden_policy = torch.from_numpy(batch['policy_hidden']).to(self.device)
         hidden = (hidden_policy, lst_action)
 
-        obs_max = torch.tensor(self.obs_max).to(self.device)
-        obs_min = torch.tensor(self.obs_min).to(self.device)
-        
+        current_nonterm = torch.ones((len(obs)), dtype=bool).to(self.device)
         model_indexes = np.random.randint(0, num_dynamics, size=(rollout_batch_size))
         traj_log_probs = torch.zeros(num_dynamics, rollout_batch_size).float().to(self.device)
-
         for h in range(self.args['horizon']):
             with torch.no_grad():
                 act, hidden_policy = self.get_meta_action(obs, hidden, deterministic)
@@ -501,9 +506,11 @@ class AlgoTrainer(BaseAlgo):
             next_obses = next_obs_dists.sample() # (num_dynamics, rollout_batch_size, obs_dim + 1)
             
             next_obs = next_obses[model_indexes, np.arange(rollout_batch_size)] # rollout_batch_size, obs_dim + 1
-            traj_log_probs += next_obs_dists.log_prob(next_obs)[:, :, :-1].sum(-1) # num_dynamics, rollout_batch_size
-            next_obs = torch.clamp(next_obs[:, :-1], obs_min, obs_max)
+            term = is_terminal(obs.cpu().numpy(), act.cpu().numpy(), next_obs.cpu().numpy(), self.args['task']).squeeze(-1)
+            traj_log_probs += next_obs_dists.log_prob(next_obs)[:, :, :-1].sum(-1) * current_nonterm.reshape(1, -1) # num_dynamics, rollout_batch_size
+            next_obs = torch.clamp(next_obs[:, :-1], self.obs_min, self.obs_max)
             
+            current_nonterm = current_nonterm & torch.tensor(~term).to(self.device)
             obs = next_obs
             lst_action = act
             hidden = (hidden_policy, lst_action)
@@ -514,26 +521,26 @@ class AlgoTrainer(BaseAlgo):
         # \sum_m p(m)p(\tau_i | m)
         div_term -= torch.logsumexp(traj_log_probs + torch.log(const) , 0) # rollout_batch_size
         
-        mask = ~torch.isinf(div_term)
-        div_term[div_term==float("inf")] = 0
+        # mask = ~torch.isinf(div_term)
+        # div_term[div_term==float("inf")] = 0
         # mi_mean = div_term.sum() / mask.sum()
         mi_loss = -div_term.sum()
         # print(f"MI {mi_mean.item()}, ratio {mask.sum() / rollout_batch_size}")
         return mi_loss 
     
+    @torch.no_grad()
     def _eval_transition(self, transition, valdata, inc_var_loss=True):
-        with torch.no_grad():
-            valdata.to_torch(device=self.device)
-            dist = transition(torch.cat([valdata['obs'], valdata['act']], dim=-1))
-            if inc_var_loss:
-                mse_losses = ((dist.mean - torch.cat([valdata['obs_next'], valdata['rew']], dim=-1)) ** 2 / (dist.variance + 1e-8)).mean(dim=(1, 2))
-                logvar = 2 * transition.max_logstd - torch.nn.functional.softplus(2 * transition.max_logstd - torch.log(dist.variance))
-                logvar = 2 * transition.min_logstd + torch.nn.functional.softplus(logvar - 2 * transition.min_logstd)
-                var_losses = logvar.mean(dim=(1, 2))
-                loss = mse_losses + var_losses
-            else:
-                loss = ((dist.mean - torch.cat([valdata['obs_next'], valdata['rew']], dim=-1)) ** 2).mean(dim=(1, 2))
-            return loss
+        valdata.to_torch(device=self.device)
+        dist = transition(torch.cat([valdata['obs'], valdata['act']], dim=-1))
+        if inc_var_loss:
+            mse_losses = ((dist.mean - torch.cat([valdata['obs_next'], valdata['rew']], dim=-1)) ** 2 / (dist.variance + 1e-8)).mean(dim=(1, 2))
+            logvar = 2 * transition.max_logstd - torch.nn.functional.softplus(2 * transition.max_logstd - torch.log(dist.variance))
+            logvar = 2 * transition.min_logstd + torch.nn.functional.softplus(logvar - 2 * transition.min_logstd)
+            var_losses = logvar.mean(dim=(1, 2))
+            loss = mse_losses + var_losses
+        else:
+            loss = ((dist.mean - torch.cat([valdata['obs_next'], valdata['rew']], dim=-1)) ** 2).mean(dim=(1, 2))
+        return loss
 
     def eval_policy(self, number_runs):
         env = get_env(self.args['task'])

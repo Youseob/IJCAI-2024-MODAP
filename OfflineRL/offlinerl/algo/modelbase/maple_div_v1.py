@@ -113,7 +113,7 @@ class AlgoTrainer(BaseAlgo):
             ckpt = torch.load(self.args['actor_path'], map_location='cpu')
             self.actor = ckpt["actor"].to(self.device)
             self.policy_gru = ckpt['policy_gru'].to(self.device)
-            eval_res = self.eval_policy(self.args["number_runs_eval"])
+            eval_res = self.eval_policy(self.args["number_runs_eval"], record=True)
             return # exit
         
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
@@ -190,7 +190,7 @@ class AlgoTrainer(BaseAlgo):
             # train dynamics
             # while model_retrain_epoch < self.args["div_update_ratio"] * epoch:
             # {epoch_per_div_update, div_update_ratio} = {2, 0.5}, {4, 0.25}, {5, 0.2} 
-            if True:
+            if out_epoch < self.args["out_epochs"]:
                 model_log["Model_Train/mle_loss"] = 0
                 model_log["Model_Train/div_loss"] = 0
                 for _ in range(self.args["model_retrain_epochs"]):
@@ -542,28 +542,35 @@ class AlgoTrainer(BaseAlgo):
             loss = ((dist.mean - torch.cat([valdata['obs_next'], valdata['rew']], dim=-1)) ** 2).mean(dim=(1, 2))
         return loss
 
-    def eval_policy(self, number_runs):
+    def eval_policy(self, number_runs, record=False):
         env = get_env(self.args['task'])
-        results = ([self.test_one_trail(env) for _ in range(number_runs)])
+        results = ([self.test_one_trail(env, episode=i, record=record) for i in range(number_runs)])
         rewards = [result[0] for result in results]
         episode_lengths = [result[1] for result in results]
+        print(rewards)
         rew_mean = np.mean(rewards)
         len_mean = np.mean(episode_lengths)
         res = OrderedDict()
         res["Eval/Reward_Mean_Env"] = rew_mean
         res["Eval/Eval_normalized_score"] = env.get_normalized_score(rew_mean)
         res["Eval/Length_Mean_Env"] = len_mean
+        print(res)
         return res
     
     @torch.no_grad()
-    def test_one_trail(self, env):
-        env = deepcopy(env)
+    def test_one_trail(self, env, episode, record=None, video_dir="/root/maple-test/OfflineRL"):
+        # env = deepcopy(env)
+        if record:
+            import os
+            from gym.wrappers.monitoring.video_recorder import VideoRecorder
+            video = VideoRecorder(env, os.path.join(video_dir, f"eposide-{episode}.mp4"))
         state, done = env.reset(), False
         lst_action = torch.zeros((1,1,self.args['action_shape'])).to(self.device)
         hidden_policy = torch.zeros((1,1,self.args['lstm_hidden_unit'])).to(self.device)
         rewards = 0
         lengths = 0
         while not done:
+            if record: video.capture_frame()
             state = state[np.newaxis]  
             state = torch.from_numpy(state).float().to(self.device)
             hidden = (hidden_policy, lst_action)
@@ -574,4 +581,5 @@ class AlgoTrainer(BaseAlgo):
             state = state_next
             rewards += reward
             lengths += 1
+        video.close()
         return (rewards, lengths)

@@ -26,7 +26,7 @@ out_epochs = 500
 policy_train_epochs = 1000
 model_retrain_epochs = 500 # 1000 
 epoch_per_div_update = 2 #1
-div_update_ratio = 0.5 # 1
+# div_update_ratio = 0.5 # 1
 number_runs_eval = 10            # evaluation epochs in mujoco 
 
 #-------------

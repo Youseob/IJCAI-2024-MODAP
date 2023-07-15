@@ -5,6 +5,7 @@
 # seed=42
 # H=10
 # reward_type=mean_reward
+# lam=0
 # epoch_per_div_update=2
 # weight=0.1
 # real_data_ratio=0.1
@@ -18,6 +19,7 @@ python examples/train_d4rl.py --algo_name=maple_div_v1 \
                               --epoch_per_div_update=$epoch_per_div_update \
                               --real_data_ratio=$real_data_ratio \
                               --reward_type=$reward_type \
+                              --lam=$lam \
                               --diversity_weight=$weight \
                               --save_path=/output/div-$num_model-model-$H-H-$weight-dw-$real_data_ratio-ratio-$epoch_per_div_update-update-$seed-ckpt.th \
                               --seed=$seed

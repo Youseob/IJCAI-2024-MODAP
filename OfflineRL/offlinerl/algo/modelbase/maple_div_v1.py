@@ -77,7 +77,7 @@ class AlgoTrainer(BaseAlgo):
         wandb.init(
             config=self.args,
             project="20230715-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
-            group="hyperparamerter_tuning" ,#self.args["algo_name"], # "maple"
+            group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
         )
@@ -560,17 +560,17 @@ class AlgoTrainer(BaseAlgo):
     @torch.no_grad()
     def test_one_trail(self, env, episode, record=None, video_dir="/root/maple-test/OfflineRL"):
         # env = deepcopy(env)
-        if record:
-            import os
-            from gym.wrappers.monitoring.video_recorder import VideoRecorder
-            video = VideoRecorder(env, os.path.join(video_dir, f"eposide-{episode}.mp4"))
+        # if record:
+        #     import os
+        #     from gym.wrappers.monitoring.video_recorder import VideoRecorder
+        #     video = VideoRecorder(env, os.path.join(video_dir, f"eposide-{episode}.mp4"))
         state, done = env.reset(), False
         lst_action = torch.zeros((1,1,self.args['action_shape'])).to(self.device)
         hidden_policy = torch.zeros((1,1,self.args['lstm_hidden_unit'])).to(self.device)
         rewards = 0
         lengths = 0
         while not done:
-            if record: video.capture_frame()
+            # if record: video.capture_frame()
             state = state[np.newaxis]  
             state = torch.from_numpy(state).float().to(self.device)
             hidden = (hidden_policy, lst_action)
@@ -581,5 +581,5 @@ class AlgoTrainer(BaseAlgo):
             state = state_next
             rewards += reward
             lengths += 1
-        video.close()
+        # video.close()
         return (rewards, lengths)

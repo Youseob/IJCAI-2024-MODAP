@@ -55,9 +55,9 @@ diversity_weight = 0.1
 
 learnable_alpha = True
 uncertainty_mode = 'aleatoric'
-transition_lr = 1e-3
-div_lr = 3e-4
-actor_lr = 3e-4
+transition_lr = 3e-4
+div_lr = 3e-5
+actor_lr = 3e-5
 critic_lr = 3e-4
 discount = 0.99
 soft_target_tau = 5e-3

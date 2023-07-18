@@ -114,14 +114,13 @@ class AlgoTrainer(BaseAlgo):
             self.actor = ckpt["actor"].to(self.device)
             self.policy_gru = ckpt['policy_gru'].to(self.device)
             eval_res = self.eval_policy(self.args["number_runs_eval"], record=True)
-            return # exit
+            return 
         
         self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
         if self.args['dynamics_path'] is not None:
             ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
             self.transition = ckpt["model"].to(self.device)
             print("[ DEBUG ] load state dict model done")
-            # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
         else:
             self.train_transition(train_buffer)
             if self.args['dynamics_save_path'] is not None: 
@@ -156,41 +155,41 @@ class AlgoTrainer(BaseAlgo):
 
         # log
         policy_log, model_log = {}, {}
-        epoch = 0
-        model_retrain_epoch = 0
-        for out_epoch in range(self.args['out_epochs']):
-            # train policy
-            self.model_pool._pointer, self.model_pool._size = 0, 0
-            for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):
-                rollout_res = self.rollout_model(self.args['rollout_batch_size'])
-                policy_log.update(rollout_res)
-                
-                policy_log["Policy_Train/policy_loss"] = 0
-                policy_log["Policy_Train/q_loss"] = 0
-                policy_log["Policy_Train/q_val"] = 0
-                for _ in range(self.args['policy_train_epochs']):
-                    batch = self._get_train_policy_batch(self.args['train_batch_size'])
-                    policy_res = self.train_policy(batch)
-                    for key in policy_res:
-                        policy_log[key] = policy_log[key] + policy_res[key]
-               
-                # average policy_res 
-                for k in policy_res:
-                    policy_log[k] /= self.args['policy_train_epochs']
-                if epoch % 4 == 0:
-                    loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
-                                    maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
-                                    value_hook=self.value_gru, device=self.device)
+        # epoch = 0
+        # model_retrain_epoch = 0
+        # for out_epoch in range(self.args['out_epochs']):
+        # train policy
+        # self.model_pool._pointer, self.model_pool._size = 0, 0
+        for epoch in range(self.args['out_epochs']):
+            rollout_res = self.rollout_model(self.args['rollout_batch_size'])
+            policy_log.update(rollout_res)
             
-                torch.cuda.empty_cache()
-            eval_res = self.eval_policy(self.args["number_runs_eval"])
-            policy_log.update(eval_res)
-            self.log_res(out_epoch, policy_log)
+            policy_log["Policy_Train/policy_loss"] = 0
+            policy_log["Policy_Train/q_loss"] = 0
+            policy_log["Policy_Train/q_val"] = 0
+            for _ in range(self.args['policy_train_epochs']):
+                batch = self._get_train_policy_batch(self.args['train_batch_size'])
+                policy_res = self.train_policy(batch)
+                for key in policy_res:
+                    policy_log[key] = policy_log[key] + policy_res[key]
+            
+            # average policy_res 
+            for k in policy_res:
+                policy_log[k] /= self.args['policy_train_epochs']
+            if epoch % 4 == 0:
+                loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
+                                maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
+                                value_hook=self.value_gru, device=self.device)
+        
+            torch.cuda.empty_cache()
+            self.log_res(epoch, policy_log)
+            # eval before update dynamics
+            if (epoch + 1) % self.args["epoch_per_div_update"] == 0:
+                eval_log = self.eval_policy(self.args["number_runs_eval"])
+                self.log_res(epoch, eval_log)
         
             # train dynamics
-            # while model_retrain_epoch < self.args["div_update_ratio"] * epoch:
-            # {epoch_per_div_update, div_update_ratio} = {2, 0.5}, {4, 0.25}, {5, 0.2} 
-            if out_epoch < self.args["out_epochs"]:
+            if ((epoch + 1) % self.args["epoch_per_div_update"] == 0) and ((epoch + 1) < self.args['out_epochs']):
                 model_log["Model_Train/mle_loss"] = 0
                 model_log["Model_Train/div_loss"] = 0
                 for _ in range(self.args["model_retrain_epochs"]):
@@ -199,8 +198,7 @@ class AlgoTrainer(BaseAlgo):
                         model_log[key] += model_res[key]
                 for key in model_res:
                     model_log[key] /= self.args["model_retrain_epochs"]
-                model_retrain_epoch += 1
-            self.log_res(out_epoch, model_log)
+                self.log_res(epoch, model_log)
         
         if self.args["save_path"] is not None:
             torch.save({'policy_gru': self.policy_gru, 'actor': self.actor, 'q1': self.q1, 'q2': self.q2, 'model': self.transition}, self.args['save_path'])
@@ -246,7 +244,7 @@ class AlgoTrainer(BaseAlgo):
         else:
             return action_res , hidden_policy_res
 
-    def train_transition(self, buffer):
+    def train_transition(self, buffer, max_update_since_update=5, max_epochs=None):
         data_size = len(buffer)
         val_size = min(int(data_size * 0.2) + 1, 1000)
         train_size = data_size - val_size
@@ -283,6 +281,8 @@ class AlgoTrainer(BaseAlgo):
                 cnt += 1
 
             if cnt >= 5:
+                break
+            if (cnt >= max_update_since_update) or (max_epochs and (epoch >= max_epochs)):
                 break
 
         indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])

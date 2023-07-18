@@ -22,7 +22,7 @@ rollout_batch_size = 50000
 # handle_per_round = 400
 
 # epoch
-out_epochs = 500
+out_epochs = 1000
 policy_train_epochs = 1000
 model_retrain_epochs = 500 # 1000 
 epoch_per_div_update = 2 #1

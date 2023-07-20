@@ -22,7 +22,7 @@ rollout_batch_size = 50000
 # handle_per_round = 400
 
 # epoch
-out_epochs = 1000
+out_epochs = 300
 policy_train_epochs = 1000
 model_retrain_epochs = 500 # 1000 
 epoch_per_div_update = 2 #1
@@ -34,7 +34,8 @@ dynamics_path = None
 dynamics_save_path = None
 only_dynamics = False
 
-hidden_layer_size = 256
+transition_hidden_size = 200
+# hidden_layer_size = 256
 hidden_layers = 2
 transition_layers = 4
 

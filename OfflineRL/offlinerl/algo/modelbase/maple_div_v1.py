@@ -43,7 +43,7 @@ def algo_init(args):
 
     args['data_name'] = args['task'][5:]
 
-    transition = EnsembleTransition(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
+    transition = EnsembleTransition(obs_shape, action_shape, args['transition_hidden_size'], args['transition_layers'],
                                     args['transition_init_num'], mode=args['mode']).to(args['device'])
     transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
     div_transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['div_lr'], weight_decay=0.000075)
@@ -155,41 +155,44 @@ class AlgoTrainer(BaseAlgo):
 
         # log
         policy_log, model_log = {}, {}
-        # epoch = 0
+        epoch = 0
         # model_retrain_epoch = 0
-        # for out_epoch in range(self.args['out_epochs']):
-        # train policy
-        # self.model_pool._pointer, self.model_pool._size = 0, 0
-        for epoch in range(self.args['out_epochs']):
-            rollout_res = self.rollout_model(self.args['rollout_batch_size'])
-            policy_log.update(rollout_res)
-            
-            policy_log["Policy_Train/policy_loss"] = 0
-            policy_log["Policy_Train/q_loss"] = 0
-            policy_log["Policy_Train/q_val"] = 0
-            for _ in range(self.args['policy_train_epochs']):
-                batch = self._get_train_policy_batch(self.args['train_batch_size'])
-                policy_res = self.train_policy(batch)
-                for key in policy_res:
-                    policy_log[key] = policy_log[key] + policy_res[key]
-            
-            # average policy_res 
-            for k in policy_res:
-                policy_log[k] /= self.args['policy_train_epochs']
-            if epoch % 4 == 0:
-                loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
-                                maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
-                                value_hook=self.value_gru, device=self.device)
+        for out_epoch in range(self.args['out_epochs']):
+            # train policy
+            self.model_pool._pointer, self.model_pool._size = 0, 0
+            for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):
+                rollout_res = self.rollout_model(self.args['rollout_batch_size'])
+                policy_log.update(rollout_res)
+                
+                policy_log["Policy_Train/policy_loss"] = 0
+                policy_log["Policy_Train/q_loss"] = 0
+                policy_log["Policy_Train/q_val"] = 0
+                for _ in range(self.args['policy_train_epochs']):
+                    batch = self._get_train_policy_batch(self.args['train_batch_size'])
+                    policy_res = self.train_policy(batch)
+                    for key in policy_res:
+                        policy_log[key] = policy_log[key] + policy_res[key]
+                
+                # average policy_res 
+                for k in policy_res:
+                    policy_log[k] /= self.args['policy_train_epochs']
+                if epoch % 4 == 0:
+                    loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
+                                    maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
+                                    value_hook=self.value_gru, device=self.device)
         
-            torch.cuda.empty_cache()
-            self.log_res(epoch, policy_log)
-            # eval before update dynamics
-            if (epoch + 1) % self.args["epoch_per_div_update"] == 0:
+                torch.cuda.empty_cache()
                 eval_log = self.eval_policy(self.args["number_runs_eval"])
-                self.log_res(epoch, eval_log)
-        
+                policy_log.update(eval_log)
+                self.log_res(epoch, policy_log)
+            
+            # eval before update dynamics
+            self.log_res(epoch, {
+                "Eval/Normalized_score_before_model_retrain": eval_log["Eval/Eval_normalized_score"] * 100
+                })
+                
             # train dynamics
-            if ((epoch + 1) % self.args["epoch_per_div_update"] == 0) and ((epoch + 1) < self.args['out_epochs']):
+            if (out_epoch + 1) < self.args['out_epochs']:
                 model_log["Model_Train/mle_loss"] = 0
                 model_log["Model_Train/div_loss"] = 0
                 for _ in range(self.args["model_retrain_epochs"]):
@@ -554,7 +557,6 @@ class AlgoTrainer(BaseAlgo):
         res["Eval/Reward_Mean_Env"] = rew_mean
         res["Eval/Eval_normalized_score"] = env.get_normalized_score(rew_mean)
         res["Eval/Length_Mean_Env"] = len_mean
-        print(res)
         return res
     
     @torch.no_grad()

@@ -60,8 +60,8 @@ def algo_init(args):
     critic_optim = torch.optim.Adam([*value_gru.parameters(),*q1.parameters(), *q2.parameters()], lr=args['critic_lr'])
 
     return {
-        "transition": {"net": transition, "opt": (transition_optim)},
-        "actor": {"net": [policy_gru,actor], "opt": actor_optim},
+        "transition": {"net": transition, "opt": transition_optim},
+        "actor": {"net": [policy_gru, actor], "opt": actor_optim},
         "log_alpha": {"net": log_alpha, "opt": alpha_optimizer},
         "critic": {"net": [value_gru, q1, q2], "opt": critic_optim},
     }

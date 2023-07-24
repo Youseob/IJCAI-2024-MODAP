@@ -21,9 +21,12 @@ from offlinerl.utils.net.maple_actor import Maple_actor
 from offlinerl.utils.net.model.maple_critic import Maple_critic
 from offlinerl.utils.simple_replay_pool import SimpleReplayTrajPool
 from offlinerl.utils import loader
+from offlinerl.utils.function import EMA
 import uuid
+
 import wandb
 import pdb
+
 
 def algo_init(args):
     logger.info('Run algo_init function')
@@ -76,7 +79,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project="20230720-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project="20230718-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -85,6 +88,9 @@ class AlgoTrainer(BaseAlgo):
         self.transition_optim, self.div_transition_optim = algo_init['transition']['opt']
         self.selected_transitions = None
 
+        self.ema_transition = None
+        self.ema = EMA(args["ema_decay"])
+        self.update_ema_every = args["update_ema_every"]
         self.policy_gru, self.actor = algo_init['actor']['net']
         self.actor_optim = algo_init['actor']['opt']
 
@@ -139,7 +145,8 @@ class AlgoTrainer(BaseAlgo):
                                  maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
                                  value_hook=self.value_gru, device=self.device)
         torch.cuda.empty_cache()
-        
+
+        self.ema_transition = deepcopy(self.transition)
         self.obs_max = train_buffer['obs'].max(axis=0)
         self.obs_min = train_buffer['obs'].min(axis=0)
         expert_range = self.obs_max - self.obs_min
@@ -156,14 +163,14 @@ class AlgoTrainer(BaseAlgo):
         # log
         policy_log, model_log = {}, {}
         epoch = 0
-        # model_retrain_epoch = 0
+        model_retrain_epoch = 0
         for out_epoch in range(self.args['out_epochs']):
             # train policy
             self.model_pool._pointer, self.model_pool._size = 0, 0
             for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):
                 rollout_res = self.rollout_model(self.args['rollout_batch_size'])
                 policy_log.update(rollout_res)
-                
+            
                 policy_log["Policy_Train/policy_loss"] = 0
                 policy_log["Policy_Train/q_loss"] = 0
                 policy_log["Policy_Train/q_val"] = 0
@@ -182,21 +189,20 @@ class AlgoTrainer(BaseAlgo):
                                     value_hook=self.value_gru, device=self.device)
         
                 torch.cuda.empty_cache()
-                eval_log = self.eval_policy(self.args["number_runs_eval"])
-                policy_log.update(eval_log)
                 self.log_res(epoch, policy_log)
-            
             # eval before update dynamics
-            self.log_res(epoch, {
-                "Eval/Normalized_score_before_model_retrain": eval_log["Eval/Eval_normalized_score"] * 100
-                })
-                
+            if (epoch + 1) % self.args["epoch_per_div_update"] == 0:
+                eval_log = self.eval_policy(self.args["number_runs_eval"])
+                self.log_res(epoch, eval_log)
+        
             # train dynamics
-            if (out_epoch + 1) < self.args['out_epochs']:
+            if (out_epoch + 1) < self.args["out_epochs"]:
                 model_log["Model_Train/mle_loss"] = 0
                 model_log["Model_Train/div_loss"] = 0
-                for _ in range(self.args["model_retrain_epochs"]):
-                    model_res = self.retrain_transition()   
+                for e in range(self.args["model_retrain_epochs"]):
+                    model_res = self.retrain_transition()
+                    if (e + 1) % self.update_ema_every == 0:
+                        self.step_ema()
                     for key in model_res:
                         model_log[key] += model_res[key]
                 for key in model_res:
@@ -246,12 +252,8 @@ class AlgoTrainer(BaseAlgo):
             return mu_res, hidden_policy_res
         else:
             return action_res , hidden_policy_res
-    
-    def pretrain_policy(self, batch_size):
-                
-        
 
-    # def train_transition(self, buffer, max_update_since_update=5, max_epochs=None):
+    def train_transition(self, buffer, max_update_since_update=5, max_epochs=None):
         data_size = len(buffer)
         val_size = min(int(data_size * 0.2) + 1, 1000)
         train_size = data_size - val_size
@@ -318,10 +320,10 @@ class AlgoTrainer(BaseAlgo):
         for i in range(self.args['horizon']):
             act, hidden_policy = self.get_meta_action(obs, hidden, deterministic)
             obs_action = torch.cat([obs,act], dim=-1) # (500000 : rollout_batch_size, 18)
-            next_obs_dists = self.transition(obs_action)
+            next_obs_dists = self.ema_transition(obs_action)
             next_obses = next_obs_dists.sample()[:, :, :-1] # (num_dynamics, rollout_batch_size, obs_dim)
 
-            rewards, rewards_mean, rewards_scale = self.transition.saved_forward(obs_action, only_reward=True) # num_dynamics, rollout_batch, 1
+            rewards, rewards_mean, rewards_scale = self.ema_transition.saved_forward(obs_action, only_reward=True) # num_dynamics, rollout_batch, 1
             if self.args["reward_type"] == "mean_reward" : # self.args["lam"]
                 reward = rewards_mean.mean(0) # rollbout_batch , 1
             elif self.args["reward_type"] == "penalized_reward":
@@ -447,6 +449,9 @@ class AlgoTrainer(BaseAlgo):
                'Policy_Train/q_val': torch.mean(min_q_).cpu().item()}
         return res
 
+    def step_ema(self):
+        self.ema.update_model_average(self.ema_transition, self.transition)
+        
     def retrain_transition(self):
         div_loss = self._dynamics_diversity_loss(self.args["div_rollout_batch_size"], deterministic=False)
         mle_loss = self._dynamics_mle_loss(self.args["mle_batch_size"])
@@ -561,6 +566,7 @@ class AlgoTrainer(BaseAlgo):
         res["Eval/Reward_Mean_Env"] = rew_mean
         res["Eval/Eval_normalized_score"] = env.get_normalized_score(rew_mean)
         res["Eval/Length_Mean_Env"] = len_mean
+        print(res)
         return res
     
     @torch.no_grad()

@@ -19,16 +19,13 @@ value_hidden_sizes=(256,256)
 hidden_sizes=(16,)
 model_pool_size = 250000
 rollout_batch_size = 50000
-#-------------
-N = 10
-worst_percentil = 0.25
+# handle_per_round = 400
 
 # epoch
-out_epochs = 1
+out_epochs = 1000
 policy_train_epochs = 1000
-model_retrain_epochs = 500
+model_retrain_epochs = 500 # 1000 
 epoch_per_div_update = 2 #1
-# div_update_ratio = 0.5 # 1
 number_runs_eval = 10            # evaluation epochs in mujoco 
 
 #-------------
@@ -37,26 +34,28 @@ dynamics_save_path = None
 only_dynamics = False
 
 transition_hidden_size = 200
+# hidden_layer_size = 256
 hidden_layers = 2
 transition_layers = 4
 
-transition_init_num = 7
-transition_select_num = 5
+transition_init_num = 20
+transition_select_num = 14
 
 transition_batch_size = 256
 train_batch_size = 256              # train policy num of trajectories
-real_data_ratio = 0.1 # 0.05
+real_data_ratio = 0.05
 
 # div loss
 mle_batch_size = 256
 div_rollout_batch_size = 256
 diversity_weight = 0.1
 
-# policy_batch_size = 256
-# data_collection_per_epoch = 50e3
+# ema
+ema_decay = 0.95
+update_ema_every = 10 
 
 learnable_alpha = True
-# uncertainty_mode = 'aleatoric'
+uncertainty_mode = 'aleatoric'
 transition_lr = 3e-4
 div_lr = 3e-5
 actor_lr = 1e-4
@@ -65,11 +64,15 @@ discount = 0.99
 soft_target_tau = 5e-3
 
 horizon = 10
-reward_type ='sample_reward' # or "mean_reward"
-lam = 0
+reward_type = 'penalized_reward' # or "mean_reward"
+lam = 0.25
 penalty_clip = 40 
 mode = 'normalize' # 'normalize', 'local', 'noRes'
 save_path = None
+
+# only for evaluation
+only_eval = False
+
 
 #tune
 # params_tune = {

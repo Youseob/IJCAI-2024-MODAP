@@ -42,7 +42,7 @@ def algo_init(args):
 
     args['data_name'] = args['task'][5:]
 
-    transition = EnsembleTransition(obs_shape, action_shape, args['hidden_layer_size'], args['transition_layers'],
+    transition = EnsembleTransition(obs_shape, action_shape, args['transition_hidden_size'], args['transition_layers'],
                                     args['transition_init_num'], mode=args['mode']).to(args['device'])
     transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['transition_lr'], weight_decay=0.000075)
     div_transition_optim = torch.optim.AdamW(transition.parameters(), lr=args['div_lr'], weight_decay=0.000075)
@@ -75,7 +75,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project="20230712-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project="20230724-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -148,7 +148,6 @@ class AlgoTrainer(BaseAlgo):
         # log
         policy_log, model_log = {}, {}
         epoch = 0
-        model_retrain_epoch = 0
         for out_epoch in range(self.args['out_epochs']):
             # train policy
             for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):
@@ -171,17 +170,17 @@ class AlgoTrainer(BaseAlgo):
                 # evaluate in mujoco
                 eval_res = self.eval_policy(self.args["number_runs_eval"])
                 policy_log.update(eval_res)
-                # self.log_res(epoch, policy_log)
+                self.log_res(epoch, policy_log)
             
                 # if epoch % 4 == 0:
-            loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
-                            maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
-                            value_hook=self.value_gru, device=self.device)
-            torch.cuda.empty_cache()
-            self.log_res(out_epoch, policy_log)
+                if epoch % self.args["epoch_per_div_update"] == 0:
+                    loader.reset_hidden_state(self.env_pool, self.args['data_name'],\
+                                    maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
+                                    value_hook=self.value_gru, device=self.device)
+                    torch.cuda.empty_cache()
             
             # train dynamics
-            while model_retrain_epoch < self.args["div_update_ratio"] * epoch:
+            if (out_epoch + 1) < self.args['out_epochs']:
                 model_log["Model_Train/mle_loss"] = 0
                 model_log["Model_Train/div_loss"] = 0
                 for _ in range(self.args["model_retrain_epochs"]):
@@ -190,9 +189,7 @@ class AlgoTrainer(BaseAlgo):
                         model_log[key] += model_res[key]
                 for key in model_res:
                     model_log[key] /= self.args["model_retrain_epochs"]
-                model_retrain_epoch += 1
-            
-            self.log_res(out_epoch, model_log)
+                self.log_res(epoch, model_log)
         
         if self.args["save_path"] is not None:
             torch.save({'actor': self.actor, 'q1': self.q1, 'q2': self.q2, 'model': self.transition}, self.args['save_path'])
@@ -310,7 +307,7 @@ class AlgoTrainer(BaseAlgo):
                 next_obses = next_obs_dists.sample()[:, :, :-1] # (num_dynamics, rollout_batch_size, obs_dim)
 
                 rewards, rewards_mean, rewards_scale = self.transition.saved_forward(obs_action, only_reward=True) # num_dynamics, rollout_batch, 1
-                if self.args["reward_type"] == "mean_reward" : # self.args["lam"]
+                if self.args["reward_type"] == "mean_reward":
                     reward = rewards_mean.mean(0) # rollbout_batch , 1
                 elif self.args["reward_type"] == "sample_reward":
                     reward = rewards[model_indexes, np.arange(rollout_batch_size)] # rollout_batch, 1
@@ -336,8 +333,7 @@ class AlgoTrainer(BaseAlgo):
                 lst_action = act
                 hidden = (hidden_policy, lst_action)
             
-        # worst_num_traj = int(self.args['N'] * self.args["worst_percentil"])
-        worst_num_traj = 1
+        worst_num_traj = int(self.args['N'] * self.args["worst_percentil"])
         worst_x_ind = np.arange(rollout_batch_size).repeat(worst_num_traj)
         worst_y_in = np.argsort(sum_reward, axis=1)[:, :worst_num_traj, :].reshape(-1) # rollout_batch_size, N*portion, 1 --> rollout_batch_size * N * portion, 
         

@@ -1,0 +1,20 @@
+#!/bin/bash
+# dataset=hopper-medium-replay
+# num_model=5
+# seed=42
+# H=5
+# weight=10
+# epoch_per_div_update=5
+# reward_type=mean_reward
+# worst_percentil=0.7
+# real_data_ratio=0.1
+python examples/train_d4rl.py --algo_name=maple_div_v2 \
+                              --exp_name=cvar-$worst_percentil-$reward_type-H-$H-dw-$weight-ratio-$real_data_ratio-$seed \
+                              --task=d4rl-$dataset-v2 \
+                              --dynamics_save_path=/root/output/$dataset-$num_model-$seed-ckpt.th \
+                              --save_path=/root/output/$dataset-$num_model-$seed-ckpt.th \
+                              --horizon=$H \
+                              --epoch_per_div_update=$epoch_per_div_update \
+                              --worst_percentil=$worst_percentil \
+                              --reward_type=$reward_type \
+                              --seed=$seed

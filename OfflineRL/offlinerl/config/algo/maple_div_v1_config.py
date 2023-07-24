@@ -39,8 +39,8 @@ transition_hidden_size = 200
 hidden_layers = 2
 transition_layers = 4
 
-transition_init_num = 20
-transition_select_num = 14
+transition_init_num = 7
+transition_select_num = 5
 
 transition_batch_size = 256
 train_batch_size = 256              # train policy num of trajectories
@@ -65,7 +65,7 @@ soft_target_tau = 5e-3
 
 horizon = 10
 reward_type = 'penalized_reward' # or "mean_reward"
-lam = 0.25
+lam = 0
 penalty_clip = 40 
 mode = 'normalize' # 'normalize', 'local', 'noRes'
 save_path = None

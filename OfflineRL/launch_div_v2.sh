@@ -11,8 +11,8 @@
 python examples/train_d4rl.py --algo_name=maple_div_v2 \
                               --exp_name=cvar-$worst_percentil-$reward_type-H-$H-dw-$weight-ratio-$real_data_ratio-$seed \
                               --task=d4rl-$dataset-v2 \
-                              --dynamics_save_path=/root/output/$dataset-$num_model-$seed-ckpt.th \
-                              --save_path=/root/output/$dataset-$num_model-$seed-ckpt.th \
+                              --dynamics_save_path=/output/$dataset-$num_model-$seed-ckpt.th \
+                              --save_path=/output/$dataset-$num_model-$seed-ckpt.th \
                               --horizon=$H \
                               --epoch_per_div_update=$epoch_per_div_update \
                               --worst_percentil=$worst_percentil \

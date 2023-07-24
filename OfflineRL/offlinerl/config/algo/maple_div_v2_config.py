@@ -24,7 +24,7 @@ N = 10
 worst_percentil = 0.25
 
 # epoch
-out_epochs = 1
+out_epochs = 500
 policy_train_epochs = 1000
 model_retrain_epochs = 500
 epoch_per_div_update = 2 #1

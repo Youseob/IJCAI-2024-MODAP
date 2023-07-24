@@ -1,0 +1,25 @@
+#!/bin/bash
+# dataset=halfcheetah-medium-replay
+init_num_model=7
+num_model=5
+reward_type=mean_reward
+lam=0
+# epoch_per_div_update=5
+# out_epochs = 200
+# H=10
+# seed=42
+# weight=0.1
+# real_data_ratio=0.2
+python examples/train_d4rl.py --algo_name=maple_div_v1 \
+                              --exp_name=div-$num_model-model-$H-H-$weight-dw-$epoch_per_div_update-update-$seed \
+                              --task=d4rl-$dataset-v2 \
+                              --transition_init_num=$init_num_model \
+                              --transition_select_num=$num_model \
+                              --dynamics_save_path=/output/$dataset-$num_model-$seed-ckpt.th \
+                              --horizon=$H \
+                              --epoch_per_div_update=$epoch_per_div_update \
+                              --out_epochs=$out_epochs \
+                              --real_data_ratio=$real_data_ratio \
+                              --diversity_weight=$weight \
+                              --save_path=/output/div-$epoch_per_div_update-update-$weight-dw-$seed-ckpt.th \
+                              --seed=$seed

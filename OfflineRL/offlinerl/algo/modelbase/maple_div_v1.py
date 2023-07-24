@@ -76,7 +76,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project="20230720-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project="20230724-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -159,7 +159,6 @@ class AlgoTrainer(BaseAlgo):
         # model_retrain_epoch = 0
         for out_epoch in range(self.args['out_epochs']):
             # train policy
-            self.model_pool._pointer, self.model_pool._size = 0, 0
             for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):
                 rollout_res = self.rollout_model(self.args['rollout_batch_size'])
                 policy_log.update(rollout_res)
@@ -246,12 +245,8 @@ class AlgoTrainer(BaseAlgo):
             return mu_res, hidden_policy_res
         else:
             return action_res , hidden_policy_res
-    
-    def pretrain_policy(self, batch_size):
-                
-        
-
-    # def train_transition(self, buffer, max_update_since_update=5, max_epochs=None):
+            
+    def train_transition(self, buffer, max_update_since_update=5, max_epochs=None):
         data_size = len(buffer)
         val_size = min(int(data_size * 0.2) + 1, 1000)
         train_size = data_size - val_size

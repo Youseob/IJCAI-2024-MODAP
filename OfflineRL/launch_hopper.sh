@@ -4,13 +4,13 @@
 # num_model=5
 # seed=42
 # H=10
-# reward_type=mean_reward
-# lam=0
 # epoch_per_div_update=5
-# weight=0.1
 # real_data_ratio=0.2
+# weight=100
+lam=0
+reward_type=mean_reward
 python examples/train_d4rl.py --algo_name=maple_div_v1 \
-                              --exp_name=div-$num_model-model-$H-H-$weight-dw-$seed \
+                              --exp_name=div-$num_model-model-$H-H-$weight-dw-$real_data_ratio-ratio-$epoch_per_div_update-update-$seed \
                               --task=d4rl-$dataset-v2 \
                               --transition_init_num=$init_num_model \
                               --transition_select_num=$num_model \

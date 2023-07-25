@@ -156,8 +156,8 @@ class AlgoTrainer(BaseAlgo):
         # log
         policy_log, model_log = {}, {}
         epoch = 0
-        out_epochs = int(1000 / self.args["epoch_per_div_update"])
-        for out_epoch in range(out_epochs):
+        # out_epochs = int(1000 / self.args["epoch_per_div_update"])
+        for out_epoch in range(self.args["out_epochs"]):
             # train policy
             for epoch in range(epoch + 1, epoch + self.args["epoch_per_div_update"] + 1):
                 rollout_res = self.rollout_model(self.args['rollout_batch_size'])
@@ -191,7 +191,7 @@ class AlgoTrainer(BaseAlgo):
                 })
                 
             # train dynamics
-            if (out_epoch + 1) < out_epochs:
+            if (out_epoch + 1) < self.args["out_epochs"]:
                 model_log["Model_Train/mle_loss"] = 0
                 model_log["Model_Train/div_loss"] = 0
                 for _ in range(self.args["model_retrain_epochs"]):

@@ -22,9 +22,8 @@ rollout_batch_size = 50000
 # handle_per_round = 400
 
 # epoch
-out_epochs = 500
+out_epochs = 1200
 policy_train_epochs = 1000
-model_retrain_epochs = 1000 
 number_runs_eval = 10            # evaluation epochs in mujoco 
 
 #-------------
@@ -32,7 +31,8 @@ dynamics_path = None
 dynamics_save_path = None
 only_dynamics = False
 
-hidden_layer_size = 256
+transition_hidden_size = 200
+# hidden_layer_size = 256
 hidden_layers = 2
 transition_layers = 4
 
@@ -48,14 +48,14 @@ real_data_ratio = 0.05
 
 learnable_alpha = True
 uncertainty_mode = 'aleatoric'
-transition_lr = 1e-3
-actor_lr = 3e-4
+transition_lr =3e-4
+actor_lr = 1e-4
 critic_lr = 3e-4
 discount = 0.99
 soft_target_tau = 5e-3
 
 horizon = 10
-reward_type = 'mean_reward' # or "mean_reward"
+reward_type = 'penalized_reward' # or "mean_reward"
 lam = 0.25
 penalty_clip = 40 
 mode = 'normalize' # 'normalize', 'local', 'noRes'

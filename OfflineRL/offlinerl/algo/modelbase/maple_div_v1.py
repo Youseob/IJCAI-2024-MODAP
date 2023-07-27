@@ -184,6 +184,8 @@ class AlgoTrainer(BaseAlgo):
                 eval_log = self.eval_policy(self.args["number_runs_eval"])
                 policy_log.update(eval_log)
                 self.log_res(epoch, policy_log)
+                if self.args["not_retrain_model"]:
+                    continue
             
             # eval before update dynamics
             self.log_res(epoch, {

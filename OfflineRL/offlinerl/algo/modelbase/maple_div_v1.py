@@ -76,7 +76,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project="20230725-"+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project="20230730-"self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -184,8 +184,6 @@ class AlgoTrainer(BaseAlgo):
                 eval_log = self.eval_policy(self.args["number_runs_eval"])
                 policy_log.update(eval_log)
                 self.log_res(epoch, policy_log)
-                if self.args["not_retrain_model"]:
-                    continue
             
             # eval before update dynamics
             self.log_res(epoch, {
@@ -445,7 +443,8 @@ class AlgoTrainer(BaseAlgo):
         return res
 
     def retrain_transition(self):
-        div_loss = self._dynamics_diversity_loss(self.args["div_rollout_batch_size"], deterministic=False)
+        # deterministic
+        div_loss = self._dynamics_diversity_loss(self.args["div_rollout_batch_size"], deterministic=True)
         mle_loss = self._dynamics_mle_loss(self.args["mle_batch_size"])
         loss = self.args["diversity_weight"] * div_loss +  mle_loss
         

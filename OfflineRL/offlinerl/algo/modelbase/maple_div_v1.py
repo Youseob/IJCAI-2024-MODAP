@@ -76,7 +76,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project="20230730-"self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project='20230730-' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())

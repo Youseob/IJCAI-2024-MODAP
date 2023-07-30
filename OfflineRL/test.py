@@ -31,11 +31,11 @@ def get_args():
 def main_parallel_run(args=get_args()):
 
     start = time.time()
-    executor = concurrent.futures.ProcessPoolExecutor(max_workers=3)
+    executor = concurrent.futures.ProcessPoolExecutor(max_workers=4)
     
     runs = [f'python examples/train_d4rl.py \
             --algo_name={args.algo_name} \
-            --exp_name={args.num_model}-model-{args.H}-H-{args.actor_lr}-{args.div_lr}-{args.epoch_per_div_update}-update-{seed}  \
+            --exp_name={args.num_model}-model-{args.H}-H-{args.actor_lr}-{args.div_lr}-{args.epoch_per_div_update}-update-{seed} \
             --task=d4rl-{args.dataset}-v2 \
             --transition_init_num={args.init_num_model} \
             --transition_select_num={args.num_model} \

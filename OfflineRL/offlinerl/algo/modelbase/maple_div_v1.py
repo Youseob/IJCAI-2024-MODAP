@@ -274,12 +274,12 @@ class AlgoTrainer(BaseAlgo):
                     indexes.append(i)
                     val_losses[i] = new_loss
 
-            # if len(indexes) > 0:
-            #     self.transition.update_save(indexes)
-            #     cnt = 0
+            if len(indexes) > 0:
+                self.transition.update_save(indexes)
+                cnt = 0
 
-            # else:
-            #     cnt += 1
+            else:
+                cnt += 1
 
             # if cnt >= 5:
             #     break
@@ -287,6 +287,7 @@ class AlgoTrainer(BaseAlgo):
             # if (cnt >= max_update_since_update) or (max_epochs and (epoch >= max_epochs)):
             #     break
             if epoch > 999:
+                print(cnt)
                 break
 
         indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])

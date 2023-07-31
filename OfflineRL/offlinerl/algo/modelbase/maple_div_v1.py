@@ -76,7 +76,7 @@ class AlgoTrainer(BaseAlgo):
         
         wandb.init(
             config=self.args,
-            project='20230730-' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project='20230731-' + self.args["task"], # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -268,23 +268,25 @@ class AlgoTrainer(BaseAlgo):
                 self._train_transition(self.transition, batch, self.transition_optim)
             new_val_losses = list(self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy())
             print(new_val_losses)
-
             indexes = []
             for i, new_loss, old_loss in zip(range(len(val_losses)), new_val_losses, val_losses):
                 if new_loss < old_loss:
                     indexes.append(i)
                     val_losses[i] = new_loss
 
-            if len(indexes) > 0:
-                self.transition.update_save(indexes)
-                cnt = 0
+            # if len(indexes) > 0:
+            #     self.transition.update_save(indexes)
+            #     cnt = 0
 
-            else:
-                cnt += 1
+            # else:
+            #     cnt += 1
 
-            if cnt >= 5:
-                break
-            if (cnt >= max_update_since_update) or (max_epochs and (epoch >= max_epochs)):
+            # if cnt >= 5:
+            #     break
+                
+            # if (cnt >= max_update_since_update) or (max_epochs and (epoch >= max_epochs)):
+            #     break
+            if epoch > 999:
                 break
 
         indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])

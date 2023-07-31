@@ -36,7 +36,10 @@ def test_one_trail_sp_local(env, policy):
     
     while not done:
         state = state
-        action = policy.get_action(state[None, ...]).reshape(-1, act_dim)
+        try:
+            action = policy.get_action(state[None, ...]).reshape(-1, act_dim)
+        except:
+            import pdb; pdb.set_trace()
         # print("actions: ", action[0:3,])
         state, reward, done, _ = env.step(action)
         rewards += reward

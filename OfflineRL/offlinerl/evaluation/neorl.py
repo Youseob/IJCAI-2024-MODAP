@@ -36,7 +36,7 @@ def test_one_trail_sp_local(env, policy):
     
     while not done:
         state = state
-        action = policy.get_action(state).reshape(-1, act_dim)
+        action = policy.get_action(state[None, ...]).reshape(-1, act_dim)
         # print("actions: ", action[0:3,])
         state, reward, done, _ = env.step(action)
         rewards += reward
@@ -49,11 +49,10 @@ def test_on_real_env(policy, env, number_of_runs=100):
     episode_lengths = []
     policy = deepcopy(policy)
     policy.eval()
-    
-    if "sp" or "sales" in env._name:
-        results = [test_one_trail_sp_local(env, policy) for _ in range(number_of_runs)]
-    else:
-        results = ray.get([test_one_trail.remote(env, policy) for _ in range(number_of_runs)])
+    # if "sp" or "sales" in env._name:
+    results = [test_one_trail_sp_local(env, policy) for _ in range(number_of_runs)]
+    # else:
+    #     results = ray.get([test_one_trail.remote(env, policy) for _ in range(number_of_runs)])
     # results = ray.get([test_one_trail.remote(env, policy) for _ in range(number_of_runs)])
     policy.train()
     
@@ -66,5 +65,5 @@ def test_on_real_env(policy, env, number_of_runs=100):
     res = OrderedDict()
     res["Reward_Mean_Env"] = rew_mean
     res["Length_Mean_Env"] = len_mean
-
+    print(res)
     return res

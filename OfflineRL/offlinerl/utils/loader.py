@@ -249,6 +249,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
     mini_traj_cum_num = 0
     for k in data_target:
         data_target[k][traj_target_ind, :] = 0
+    import pdb; pdb.set_trace()
     if adapt:
         # for each trajectory
         for i in range(data['policy_hidden'].shape[0]):
@@ -262,6 +263,144 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
             mini_target_ind += 1
             
             if data['end_step'][i] or mini_target_ind == maxlen:
+                traj_target_ind += 1
+                traj_target_ind = traj_target_ind % replay_pool._max_size
+                mini_traj_cum_num += 1
+                mini_target_ind = 0
+        
+        replay_pool._pointer += mini_traj_cum_num
+        replay_pool._size = int(min(mini_traj_cum_num + replay_pool._size, replay_pool._max_size))
+        replay_pool._pointer %= replay_pool._max_size
+        print('[ DEBUG ] data num: {}, max size: {}'.format(mini_traj_cum_num, replay_pool._max_size)) 
+        return 
+    
+def restore_pool_neorl(replay_pool, name, data_type='low', train_num=100, adapt=True, maxlen=5, policy_hook=None, value_hook=None, model_hook=None, \
+                      device=None, traj_num_to_infer=100):
+    import neorl
+    env = neorl.make(name)
+    DATASET_TO_BUFFER = {
+        'obs': 'observations',
+        'next_obs': 'next_observations',
+        'action': 'actions',
+        'reward': 'rewards',
+        'last_actions': 'last_actions',
+        'valid': 'valid',
+        'policy_hidden': 'policy_hidden',
+        'value_hidden': 'value_hidden'
+    }
+    mask_steps = env._max_episode_steps - 1
+    data = env.get_dataset(data_type=data_type, train_num=train_num)[0]
+
+
+    get_policy_hidden = policy_hook if policy_hook else None
+    get_value_hidden = value_hook if value_hook else None
+    # data['reward'] = np.expand_dims(data['rewards'], axis=1)
+    # data['terminals'] = np.expand_dims(data['terminals'], axis=1)
+    data['last_actions'] = np.concatenate((np.zeros((1, data['action'].shape[1]), dtype=np.float32), data['action'][:-1, :]), axis=0).copy()
+    # data['first_step'] = np.zeros_like(data['terminals'])
+    # data['end_step'] = np.zeros_like(data['terminals'])
+    data['valid'] = np.ones_like(data['done'])
+    # max_traj_len = -1
+    # last_start = 0
+    # traj_num = 1
+    # traj_lens = []
+    # ill_idxs = []
+    # for i in range(data['observations'].shape[0]):
+    #     non_terminal = True
+    #     if i >= 1:
+    #         non_terminal = (data['observations'][i] == data['next_observations'][i-1]).all()
+    #         if data['terminals'][i-1]:
+    #             non_terminal = False
+
+    #     if not non_terminal:
+    #         if data['terminals'][i - 1]:
+    #             data['next_observations'][i - 1] = data['observations'][i - 1]
+    #         data['last_actions'][i][:] = 0
+    #         data['first_step'][i][:] = 1
+    #         data['end_step'][i-1][:] = 1
+    #         traj_len = i - last_start
+    #         max_traj_len = max(max_traj_len, traj_len)
+    #         last_start = i
+    #         traj_num += 1
+    #         traj_lens.append(traj_len)
+    #         if traj_len > 1000:
+    #             print('[ DEBUG + WARN ]: trajectory length is too large: current step is ', i, traj_num,)
+    # print(ill_idxs)
+    data['end_idx'] = np.zeros_like(data['index'])
+    data['end_idx'][:-1] = data['index'][1:]
+    data['end_idx'][-1] = len(data['obs'])
+    traj_lens = data['end_idx'] - data['index']
+    max_traj_len = np.max(traj_lens)
+    traj_num = train_num
+    assert len(data['index']) == traj_num
+    # assert len(traj_lens) == traj_num
+    ##########################
+    if adapt and policy_hook is not None:
+        # making init hidden state
+        # 1, making state and lst action
+        data['policy_hidden'] = None # np.zeros((data['last_actions'].shape[0], policy_hidden.shape[-1]))
+        data['value_hidden'] = None # np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]))
+        last_start_ind = 0
+        traj_num_to_infer = 400
+        for i_ter in range(int(np.ceil(traj_num / traj_num_to_infer))):
+            traj_lens_it = traj_lens[traj_num_to_infer * i_ter : min(traj_num_to_infer * (i_ter + 1), traj_num)]
+            states = np.zeros((len(traj_lens_it), max_traj_len, data['obs'].shape[-1]), dtype=np.float32)
+            actions = np.zeros((len(traj_lens_it), max_traj_len, data['action'].shape[-1]), dtype=np.float32)
+            lst_actions = np.zeros((len(traj_lens_it), max_traj_len, data['action'].shape[-1]), dtype=np.float32)
+            start_ind = last_start_ind
+            for ind, item in enumerate(traj_lens):
+                states[ind, :item] = data['obs'][start_ind:(start_ind+item)]
+                ###################################################################
+                lst_actions[ind, 1:item] = data['action'][start_ind:(start_ind+item-1)]
+                #######################################################################3
+                actions[ind, :item] = data['action'][start_ind:(start_ind+item)]
+                start_ind += item
+            with torch.no_grad():
+                # states (400, 999, 17) lst_action (400, 999, 6), 
+                policy_hidden_out = get_policy_hidden.get_hidden(torch.from_numpy(states).to(device),\
+                                                                 torch.from_numpy(lst_actions).to(device), torch.IntTensor(traj_lens_it))
+                value_hidden_out = get_value_hidden.get_hidden(torch.from_numpy(states).to(device),\
+                                                               torch.from_numpy(lst_actions).to(device), torch.IntTensor(traj_lens_it))
+            max_len = max(traj_lens_it)
+            
+            policy_hidden = np.concatenate((np.zeros((len(traj_lens_it), 1, policy_hidden_out.shape[-1]), dtype=np.float32),
+                                            policy_hidden_out[:, :-1].cpu().detach().numpy()), axis=-2) # 
+            value_hidden = np.concatenate((np.zeros((len(traj_lens_it), 1, value_hidden_out.shape[-1]), dtype=np.float32),
+                                           value_hidden_out[:, :-1].cpu().detach().numpy()), axis=-2)
+            start_ind = last_start_ind
+            for ind, item in enumerate(traj_lens_it):
+                if data['policy_hidden'] is None:
+                    data['policy_hidden'] = np.zeros((data['action'].shape[0], policy_hidden.shape[-1]), dtype=np.float32)
+                    data['value_hidden'] = np.zeros((data['action'].shape[0], value_hidden.shape[-1]), dtype=np.float32)
+                data['policy_hidden'][start_ind:(start_ind + item)] = policy_hidden[ind, :item]
+                data['value_hidden'][start_ind:(start_ind + item)] = value_hidden[ind, :item]
+                start_ind += item
+            last_start_ind = start_ind
+    
+    data_target = {k: replay_pool.fields[k] for k in replay_pool.fields}
+    traj_target_ind = 0
+    mini_target_ind = 0
+    mini_traj_cum_num = 0
+    for k in data_target:
+        data_target[k][traj_target_ind, :] = 0
+    if adapt:
+        # for each trajectory
+        for i in range(data['policy_hidden'].shape[0]):
+            if mini_target_ind == 0:
+                for k in data:
+                    if k in data_target:
+                        data_target[k][traj_target_ind, :] = 0
+            for k in data:
+                if k in DATASET_TO_BUFFER.keys():
+                # if k in data_target:
+                    if (k == 'last_actions') and (i in list(data['index'])):
+                        continue
+                    data_target[DATASET_TO_BUFFER[k]][traj_target_ind, mini_target_ind, :] = data[k][i]
+            mini_target_ind += 1
+            
+            # if data['end_step'][i] or mini_target_ind == maxlen:
+            if (i in list(data['end_idx']-1)) or mini_target_ind == maxlen:
+                print(f"{i}-th is end_idx")
                 traj_target_ind += 1
                 traj_target_ind = traj_target_ind % replay_pool._max_size
                 mini_traj_cum_num += 1
@@ -384,6 +523,96 @@ def reset_hidden_state(replay_pool, name, maxlen=5, policy_hook=None, value_hook
             data_target[k][traj_target_ind, mini_target_ind, :] = data_new[k][i]
         mini_target_ind += 1
         if data['end_step'][i] or mini_target_ind == maxlen:
+            traj_target_ind += 1
+            traj_target_ind = traj_target_ind % replay_pool._max_size
+            mini_target_ind = 0
+            for k in data_new:
+                data_target[k][traj_target_ind, :] = 0
+
+def reset_hidden_state_neorl(replay_pool, name, data_type="low", train_num=100, maxlen=5, policy_hook=None, value_hook=None, device=None, fake_env=None):
+    import neorl
+    env = neorl.make(name)
+    DATASET_TO_BUFFER = {
+        'obs': 'observations',
+        'next_obs': 'next_observations',
+        'action': 'actions',
+        'reward': 'rewards',
+        'last_actions': 'last_actions',
+        'valid': 'valid',
+        'policy_hidden': 'policy_hidden',
+        'value_hidden': 'value_hidden'
+    }
+
+    mask_steps = env._max_episode_steps - 1
+    data = env.get_dataset(data_type=data_type, train_num=train_num)[0]
+    get_policy = policy_hook if policy_hook else None
+    get_value = value_hook if value_hook else None
+    # data['rewards'] = np.expand_dims(data['rewards'], axis=1)
+    # data['terminals'] = np.expand_dims(data['terminals'], axis=1)
+    data['last_actions'] = np.concatenate((np.zeros((1, data['action'].shape[1]), dtype=np.float32), data['action'][:-1, :]),
+                                          axis=0).copy()
+    # data['valid'] = np.ones_like(data['dones'])
+    print('[ DEBUG ] reset_hidden_state: key in data: {}'.format(list(data.keys())))
+    data['end_idx'] = np.zeros_like(data['index'])
+    data['end_idx'][:-1] = data['index'][1:]
+    data['end_idx'][-1] = len(data['obs'])
+    traj_lens = data['end_idx'] - data['index']
+    max_traj_len = np.max(traj_lens)
+    traj_num = train_num
+    assert len(data['index']) == traj_num
+    
+    data['policy_hidden'] = None # np.zeros((data['last_actions'].shape[0], policy_hidden.shape[-1]))
+    data['value_hidden'] = None # np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]))
+    last_start_ind = 0
+    traj_num_to_infer = 400
+    for i_ter in range(int(np.ceil(traj_num / traj_num_to_infer))):
+        traj_lens_it = traj_lens[traj_num_to_infer * i_ter : min(traj_num_to_infer * (i_ter + 1), traj_num)]
+        states = np.zeros((len(traj_lens_it), max_traj_len, data['obs'].shape[-1]), dtype=np.float32)
+        actions = np.zeros((len(traj_lens_it), max_traj_len, data['action'].shape[-1]), dtype=np.float32)
+        lst_actions = np.zeros((len(traj_lens_it), max_traj_len, data['action'].shape[-1]), dtype=np.float32)
+        start_ind = last_start_ind
+        for ind, item in enumerate(traj_lens_it):
+            states[ind, :item] = data['obs'][start_ind:(start_ind+item)]
+            # lst_actions[ind, :item] = data['last_actions'][start_ind:(start_ind+item)]
+            lst_actions[ind, 1:item] = data['action'][start_ind:(start_ind+item-1)]
+            actions[ind, :item] = data['action'][start_ind:(start_ind+item)]
+            start_ind += item
+        print('[ DEBUG ] reset_hidden_state size of total env states: {}, actions: {}'.format(states.shape, actions.shape))
+        with torch.no_grad():
+            policy_hidden_out = get_policy.get_hidden(torch.from_numpy(states).to(device), \
+                                                      torch.from_numpy(lst_actions).to(device), torch.IntTensor(traj_lens_it))
+            value_hidden_out = get_value.get_hidden(torch.from_numpy(states).to(device),\
+                                                    torch.from_numpy(lst_actions).to(device), torch.IntTensor(traj_lens_it))
+        policy_hidden = np.concatenate((np.zeros((len(traj_lens_it), 1, policy_hidden_out.shape[-1]), dtype=np.float32),
+                                        policy_hidden_out[:, :-1].cpu().detach().numpy()), axis=-2)
+        value_hidden = np.concatenate((np.zeros((len(traj_lens_it), 1, value_hidden_out.shape[-1]), dtype=np.float32),
+                                        value_hidden_out[:, :-1].cpu().detach().numpy()), axis=-2)
+
+        start_ind = last_start_ind
+        for ind, item in enumerate(traj_lens_it):
+            if data['policy_hidden'] is None:
+                data['policy_hidden'] = np.zeros((data['last_actions'].shape[0], policy_hidden.shape[-1]), dtype=np.float32)
+                data['value_hidden'] = np.zeros((data['last_actions'].shape[0], value_hidden.shape[-1]), dtype=np.float32)
+            data['policy_hidden'][start_ind:(start_ind + item)] = policy_hidden[ind, :item]
+            data['value_hidden'][start_ind:(start_ind + item)] = value_hidden[ind, :item]
+            start_ind += item
+        last_start_ind = start_ind
+    print('[ DEBUG ] reset_hidden_state: inferring hidden state done')
+    data_new = {'policy_hidden': data['policy_hidden'],
+            'value_hidden': data['value_hidden']}
+    # data_adapt = {k: [] for k in data_new}
+    # it_traj = {k: [] for k in data_new}
+    # current_len = 0
+    data_target = {k: replay_pool.fields[k] for k in data_new}
+    traj_target_ind = 0
+    mini_target_ind = 0
+    for k in data_new:
+        data_target[k][traj_target_ind, :] = 0
+    for i in range(data_new['policy_hidden'].shape[0]):
+        for k in data_new:
+            data_target[k][traj_target_ind, mini_target_ind, :] = data_new[k][i]
+        mini_target_ind += 1
+        if (i in list(data['end_idx']-1)) or mini_target_ind == maxlen:
             traj_target_ind += 1
             traj_target_ind = traj_target_ind % replay_pool._max_size
             mini_target_ind = 0

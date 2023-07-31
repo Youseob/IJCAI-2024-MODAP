@@ -132,3 +132,14 @@ def is_terminal(obs,act, next_obs,task):
         return termination_fn_pendulum(obs,act,next_obs)
     elif 'humanoid' in task:
         return termination_fn_humanoid(obs, act, next_obs)
+    # neorl
+    elif 'HalfCheetah' in task:
+        if obs.ndim == 2:
+            return termination_fn_halfcheetah(obs[:, 1:], act, next_obs[:, 1:])
+    elif 'Hopper' in task:
+        if obs.ndim == 2:
+            return termination_fn_hopper(obs[:, 1:],act,next_obs[:, 1:])
+    elif 'Walker2d' in task:
+        if obs.ndim == 2:
+            return termination_fn_walker2d(obs[:, 1:], act, next_obs[:, 1:])
+    

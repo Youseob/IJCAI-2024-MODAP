@@ -272,7 +272,8 @@ class AlgoTrainer(BaseAlgo):
                 batch = train_buffer[batch_idxs]
                 self._train_transition(self.transition, batch, self.transition_optim)
             new_val_losses = list(self._eval_transition(self.transition, valdata, inc_var_loss=False).cpu().numpy())
-            print(new_val_losses)
+            if epoch % 10 == 0:
+                print(new_val_losses)
             indexes = []
             for i, new_loss, old_loss in zip(range(len(val_losses)), new_val_losses, val_losses):
                 if new_loss < old_loss:

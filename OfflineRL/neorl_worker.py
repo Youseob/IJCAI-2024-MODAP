@@ -48,7 +48,7 @@ def main_parallel_run(args=get_args()):
             --task_train_num={args.task_train_num} \
             --transition_init_num={args.init_num_model} \
             --transition_select_num={args.num_model} \
-            --dynamics_save_path=/output/{args.task}-{args.task_data_type}-{args.task_train_num}-model-{args.num_model}-{seed}-ckpt.th \
+            --dynamics_path=/model/{args.task}-{args.task_data_type}-{args.task_train_num}-model-{args.num_model}-{seed}-ckpt.th \
             --horizon={args.H} \
             --epoch_per_div_update={args.epoch_per_div_update} \
             --out_epochs={args.out_epochs} \
@@ -66,7 +66,7 @@ def main_parallel_run(args=get_args()):
     
     procs = []
     for i, single_run in enumerate(runs):
-        procs.append(executor.submit(subprocess.run, single_run, shell=True, capture_output=True)) 
+        procs.append(executor.submit(subprocess.run, single_run, shell=True, capture_output=True)) # vessl True 
 
     for p in concurrent.futures.as_completed(procs):   
         print(p.result().args[-1] + '...completed')

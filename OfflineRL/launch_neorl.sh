@@ -1,7 +1,7 @@
 #!/bin/bash
-# task=HalfCheetah-v3
+# task=Hopper-v3
 # task_data_type="low"
-# task_train_num=100
+# task_train_num=1000
 # data_dir=None
 # init_num_model=7
 # num_model=5
@@ -12,11 +12,11 @@
 # div_lr=3e-5
 # real_data_ratio=0.05
 # weight=100
-out_epochs=1200
+out_epochs=600
 lam=0
 reward_type=mean_reward
 # seed=0
-# num_worker=3
+# num_worker=1
 python required.py
 
 python neorl_worker.py --algo_name=maple_div_neorl \

@@ -350,7 +350,7 @@ def restore_pool_neorl(replay_pool, name, data_type='low', train_num=100, adapt=
             actions = np.zeros((len(traj_lens_it), max_traj_len, data['action'].shape[-1]), dtype=np.float32)
             lst_actions = np.zeros((len(traj_lens_it), max_traj_len, data['action'].shape[-1]), dtype=np.float32)
             start_ind = last_start_ind
-            for ind, item in enumerate(traj_lens):
+            for ind, item in enumerate(traj_lens_it):
                 states[ind, :item] = data['obs'][start_ind:(start_ind+item)]
                 ###################################################################
                 lst_actions[ind, 1:item] = data['action'][start_ind:(start_ind+item-1)]
@@ -402,7 +402,7 @@ def restore_pool_neorl(replay_pool, name, data_type='low', train_num=100, adapt=
             
             # if data['end_step'][i] or mini_target_ind == maxlen:
             if (i in list(data['end_idx']-1)) or mini_target_ind == maxlen:
-                print(f"{i}-th is end_idx")
+                # print(f"{i}-th is end_idx")
                 traj_target_ind += 1
                 traj_target_ind = traj_target_ind % replay_pool._max_size
                 mini_traj_cum_num += 1

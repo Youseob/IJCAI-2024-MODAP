@@ -275,7 +275,7 @@ def restore_pool_d4rl(replay_pool, name, adapt=True, maxlen=5,\
         return 
     
 def restore_pool_neorl(replay_pool, name, data_type='low', train_num=100, adapt=True, maxlen=5, policy_hook=None, value_hook=None, model_hook=None, \
-                      device=None, traj_num_to_infer=100):
+                      device=None, traj_num_to_infer=100, data_dir=None):
     import neorl
     env = neorl.make(name)
     DATASET_TO_BUFFER = {
@@ -289,9 +289,11 @@ def restore_pool_neorl(replay_pool, name, data_type='low', train_num=100, adapt=
         'value_hidden': 'value_hidden'
     }
     mask_steps = env._max_episode_steps - 1
-    data = env.get_dataset(data_type=data_type, train_num=train_num)[0]
-
-
+    if data_dir is not None:
+        data = env.get_dataset(data_type=data_type, train_num=train_num, path=data_dir, need_val=False)[0]
+    else:
+        data = env.get_dataset(data_type=data_type, train_num=train_num, need_val=False)[0]
+        
     get_policy_hidden = policy_hook if policy_hook else None
     get_value_hidden = value_hook if value_hook else None
     # data['reward'] = np.expand_dims(data['rewards'], axis=1)
@@ -529,7 +531,7 @@ def reset_hidden_state(replay_pool, name, maxlen=5, policy_hook=None, value_hook
             for k in data_new:
                 data_target[k][traj_target_ind, :] = 0
 
-def reset_hidden_state_neorl(replay_pool, name, data_type="low", train_num=100, maxlen=5, policy_hook=None, value_hook=None, device=None, fake_env=None):
+def reset_hidden_state_neorl(replay_pool, name, data_type="low", train_num=100, maxlen=5, policy_hook=None, value_hook=None, device=None, fake_env=None, data_dir=None):
     import neorl
     env = neorl.make(name)
     DATASET_TO_BUFFER = {
@@ -544,7 +546,11 @@ def reset_hidden_state_neorl(replay_pool, name, data_type="low", train_num=100, 
     }
 
     mask_steps = env._max_episode_steps - 1
-    data = env.get_dataset(data_type=data_type, train_num=train_num)[0]
+    if data_dir is not None:
+        data = env.get_dataset(data_type=data_type, train_num=train_num, path=data_dir, need_val=False)[0]
+    else:
+        data = env.get_dataset(data_type=data_type, train_num=train_num, need_val=False)[0]
+        
     get_policy = policy_hook if policy_hook else None
     get_value = value_hook if value_hook else None
     # data['rewards'] = np.expand_dims(data['rewards'], axis=1)

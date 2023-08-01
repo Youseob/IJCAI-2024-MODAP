@@ -11,12 +11,17 @@ from offlinerl.data.neorl import load_neorl_buffer
 dataset_dir = os.path.join(log_path(),"./offlinerl_datasets")
 create_dir(dataset_dir)
 
-def load_data_from_neorl(task, task_data_type = "low", task_train_num = 99):
+def load_data_from_neorl(task, task_data_type="low", task_train_num =99, path=None):
     import neorl
     env = neorl.make(task)
-    train_data, val_data = env.get_dataset(data_type = task_data_type, train_num = task_train_num)
+    if path is not None:
+        train_data, val_data = env.get_dataset(data_type=task_data_type, train_num=task_train_num, path=path, need_val=False)
+    else:
+        train_data, val_data = env.get_dataset(data_type = task_data_type, train_num = task_train_num, need_val=False)
     
-    train_buffer, val_buffer = load_neorl_buffer(train_data), load_neorl_buffer(val_data)
+    # train_buffer, val_buffer = load_neorl_buffer(train_data), load_neorl_buffer(val_data)
+    train_buffer= load_neorl_buffer(train_data)
 
 
-    return train_buffer, val_buffer
+    # return train_buffer, val_buffer
+    return train_buffer, None

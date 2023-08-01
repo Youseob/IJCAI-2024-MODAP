@@ -41,7 +41,7 @@ def algo_init(args):
     else:
         raise NotImplementedError
 
-    args['data_name'] = args['task'][5:]
+    # args['data_name'] = args['task'][5:]
 
     transition = EnsembleTransition(obs_shape, action_shape, args['transition_hidden_size'], args['transition_layers'],
                                     args['transition_init_num'], mode=args['mode']).to(args['device'])
@@ -73,10 +73,9 @@ class AlgoTrainer(BaseAlgo):
     def __init__(self, algo_init, args):
         super(AlgoTrainer, self).__init__(args)
         self.args = args        
-        
         wandb.init(
             config=self.args,
-            project='NeoRL'+self.args["task"], # "d4rl-halfcheetah-medium-v2"
+            project=f'NeoRL-{self.args["task"]}-{self.args["task_data_type"]}-{self.args["task_train_num"]}', # "d4rl-halfcheetah-medium-v2"
             group=self.args["algo_name"], # "maple"
             name=self.args["exp_name"], 
             id=str(uuid.uuid4())
@@ -135,9 +134,10 @@ class AlgoTrainer(BaseAlgo):
         self.model_pool = SimpleReplayTrajPool(self.obs_space, self.action_space, self.args['horizon'],\
                                                self.args['lstm_hidden_unit'], self.args['model_pool_size'])
 
-        loader.restore_pool_neorl(self.env_pool, self.args['task'], adapt=True,\
+        loader.restore_pool_neorl(self.env_pool, self.args['task'], data_type=self.args["task_data_type"],  \
+                                 train_num=self.args["task_train_num"], adapt=True,\
                                  maxlen=self.args['horizon'],policy_hook=self.policy_gru,\
-                                 value_hook=self.value_gru, device=self.device)
+                                 value_hook=self.value_gru, device=self.device, data_dir=self.args["data_dir"])
         torch.cuda.empty_cache()
         
         self.obs_max = train_buffer['obs'].max(axis=0)
@@ -178,7 +178,7 @@ class AlgoTrainer(BaseAlgo):
                 if epoch % 4 == 0:
                     loader.reset_hidden_state_neorl(self.env_pool, self.args['task'],\
                                     maxlen=self.args['horizon'], policy_hook=self.policy_gru,\
-                                    value_hook=self.value_gru, device=self.device)
+                                    value_hook=self.value_gru, device=self.device, data_dir=self.args["data_dir"])
         
                 torch.cuda.empty_cache()
                 eval_log = self.eval_policy(self.args["number_runs_eval"])
@@ -286,14 +286,15 @@ class AlgoTrainer(BaseAlgo):
             else:
                 cnt += 1
 
-            # if cnt >= 5:
-            #     break
+            if cnt >= 5:
+                self.log_res(0, {"Eval/End_Epoch_For_model" : epoch})
+                break
                 
             # if (cnt >= max_update_since_update) or (max_epochs and (epoch >= max_epochs)):
             #     break
-            if epoch > 999:
-                print(cnt)
-                break
+            # if epoch > 999:
+            #     print(cnt)
+            #     break
 
         indexes = self._select_best_indexes(val_losses, n=self.args['transition_select_num'])
         self.transition.set_select(indexes)

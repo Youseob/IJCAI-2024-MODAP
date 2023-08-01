@@ -4,6 +4,7 @@ from offlinerl.utils.exp import select_free_cuda
 task = "Hopper-v3"
 task_data_type = "low"
 task_train_num = 100
+data_dir = "/root"
 
 seed = 0
 
@@ -22,7 +23,7 @@ rollout_batch_size = 50000
 # handle_per_round = 400
 
 # epoch
-out_epochs = 300
+out_epochs = 1000
 policy_train_epochs = 1000
 model_retrain_epochs = 500 # 1000 
 epoch_per_div_update = 2 #1
@@ -39,7 +40,7 @@ transition_hidden_size = 200
 hidden_layers = 2
 transition_layers = 4
 
-transition_init_num = 5
+transition_init_num = 7
 transition_select_num = 5
 
 transition_batch_size = 256

@@ -12,11 +12,11 @@
 # div_lr=3e-5
 # real_data_ratio=0.05
 # weight=100
-out_epochs=600
+# out_epochs=1000
 lam=0
 reward_type=mean_reward
 # seed=0
-# num_worker=1
+# num_worker=4
 python required.py
 
 python neorl_worker.py --algo_name=maple_div_neorl \

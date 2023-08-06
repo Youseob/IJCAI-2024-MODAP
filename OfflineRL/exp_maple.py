@@ -42,7 +42,7 @@ def main_parallel_run(args=get_args()):
             --actor_lr={args.actor_lr} \
             --reward_type={args.reward_type} \
             --lam={args.lam} \
-            --save_path=/output/maple-{args.num_model}-model-{args.H}-H-{args.weight}-dw-{seed}-ckpt.th \
+            --save_path=/output/maple-{args.num_model}-model-{args.H}-H-{args.lam}-{seed}-ckpt.th \
             --seed={seed}'
             for seed in range(args.seed, args.seed+num_worker)                  
             ]

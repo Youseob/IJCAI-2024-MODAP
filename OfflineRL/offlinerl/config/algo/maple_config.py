@@ -5,7 +5,7 @@ task = "Hopper-v3"
 task_data_type = "low"
 task_train_num = 99
 
-seed = 42
+seed = 0
 
 device = 'cuda'+":"+str(select_free_cuda()) if torch.cuda.is_available() else 'cpu'
 # device = 'cuda:0'
@@ -22,7 +22,7 @@ rollout_batch_size = 50000
 # handle_per_round = 400
 
 # epoch
-out_epochs = 1200
+out_epochs = 2000
 policy_train_epochs = 1000
 number_runs_eval = 10            # evaluation epochs in mujoco 
 

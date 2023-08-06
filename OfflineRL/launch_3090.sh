@@ -12,7 +12,7 @@
 out_epochs=1200
 lam=0
 reward_type=mean_reward
-seed=0
+# seed=0
 
 python required.py
 

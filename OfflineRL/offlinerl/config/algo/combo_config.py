@@ -14,7 +14,7 @@ max_action = None
 
 dynamics_path = None
 
-hidden_layer_size = 400
+hidden_layer_size = 200
 hidden_layers = 2
 transition_layers = 4
 

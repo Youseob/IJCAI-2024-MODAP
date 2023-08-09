@@ -36,10 +36,8 @@ def test_one_trail_sp_local(env, policy):
     
     while not done:
         state = state
-        try:
-            action = policy.get_action(state[None, ...]).reshape(-1, act_dim)
-        except:
-            import pdb; pdb.set_trace()
+        action = policy.get_action(state[None, ...]).reshape(-1)
+        # import pdb; pdb.set_trace()
         # print("actions: ", action[0:3,])
         state, reward, done, _ = env.step(action)
         rewards += reward
@@ -47,7 +45,7 @@ def test_one_trail_sp_local(env, policy):
 
     return (rewards, lengths)
 
-def test_on_real_env(policy, env, number_of_runs=100):
+def test_on_real_env(policy, env, number_of_runs=10):
     rewards = []
     episode_lengths = []
     policy = deepcopy(policy)

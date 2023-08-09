@@ -10,9 +10,9 @@ def run_algo(**kwargs):
     train_buffer, val_buffer = load_data_from_neorl(algo_config["task"], algo_config["task_data_type"], algo_config["task_train_num"], algo_config["data_dir"])
     algo_init = algo_init_fn(algo_config)
     algo_trainer = algo_trainer_obj(algo_init, algo_config)
-    # callback = OnlineCallBackFunction()
-    # callback.initialize(train_buffer=train_buffer, val_buffer=val_buffer, task=algo_config["task"])
-    callback = None
+    callback = OnlineCallBackFunction()
+    callback.initialize(train_buffer=train_buffer, val_buffer=val_buffer, task=algo_config["task"])
+    # callback = None
     algo_trainer.train(train_buffer, val_buffer, callback_fn=callback)
 
 if __name__ == "__main__":

@@ -75,8 +75,8 @@ class OnlineCallBackFunction(CallBackFunction):
         assert self.is_initialized, "`initialize` should be called before callback."
         policy = deepcopy(policy).cpu()
         eval_res = OrderedDict()
-        if not ray.is_initialized():
-            ray.init(ignore_reinit_error=True)
+        # if not ray.is_initialized():
+        #     ray.init(ignore_reinit_error=True)
         eval_res.update(test_on_real_env(policy, self.env, number_of_runs=self.number_of_runs))
         return eval_res
 

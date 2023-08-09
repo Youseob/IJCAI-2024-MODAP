@@ -15,7 +15,8 @@ from offlinerl.utils.exp import setup_seed
 
 from offlinerl.utils.data import ModelBuffer
 from offlinerl.utils.net.model.ensemble import EnsembleTransition
-
+import wandb
+import uuid
 def algo_init(args):
     logger.info('Run algo_init function')
 
@@ -68,6 +69,13 @@ class AlgoTrainer(BaseAlgo):
     def __init__(self, algo_init, args):
         super(AlgoTrainer, self).__init__(args)
         self.args = args
+        wandb.init(
+            config=self.args,
+            project=f'NeoRL-{self.args["task"]}-{self.args["task_data_type"]}-{self.args["task_train_num"]}', # "d4rl-halfcheetah-medium-v2"
+            group=self.args["algo_name"], # "combo"
+            name=self.args["exp_name"], 
+            id=str(uuid.uuid4())
+        )
 
         self.transition = algo_init['transition']['net']
         self.transition_optim = algo_init['transition']['opt']
@@ -91,8 +99,11 @@ class AlgoTrainer(BaseAlgo):
         self.device = args['device']
         
     def train(self, train_buffer, val_buffer, callback_fn):
+        self.transition.update_self(torch.cat((torch.Tensor(train_buffer["obs"]), torch.Tensor(train_buffer["obs_next"])), 0))
         if self.args['dynamics_path'] is not None:
-            self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
+            ckpt = torch.load(self.args['dynamics_path'], map_location='cpu')
+            self.transition = ckpt["model"].to(self.device)
+            # self.transition = torch.load(self.args['dynamics_path'], map_location='cpu').to(self.device)
         else:
             self.train_transition(train_buffer)
         self.transition.requires_grad_(False)   

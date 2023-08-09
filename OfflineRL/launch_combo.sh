@@ -1,7 +1,7 @@
 #!/bin/bash
 # task=Hopper-v3
 # task_data_type="low"
-# #task_train_num=100
+# task_train_num=1000
 # data_dir=None
 # init_num_model=7
 # num_model=5
@@ -27,7 +27,7 @@ python neorl_combo.py --algo_name=combo \
 
 python neorl_combo.py --algo_name=combo \
                       --task=$task \
-                      --task_data_type=1000 \
+                      --task_data_type=$task_data_type \
                       --task_train_num=1000 \
                       --data_dir=$data_dir \
                       --init_num=$init_num_model \

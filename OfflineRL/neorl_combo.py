@@ -48,7 +48,7 @@ def main_parallel_run(args=get_args()):
     
     procs = []
     for i, single_run in enumerate(runs):
-        procs.append(executor.submit(subprocess.run, single_run, shell=True, capture_output=False)) # vessl True 
+        procs.append(executor.submit(subprocess.run, single_run, shell=True, capture_output=True)) # vessl True 
 
     for p in concurrent.futures.as_completed(procs):   
         print(p.result().args[-1] + '...completed')

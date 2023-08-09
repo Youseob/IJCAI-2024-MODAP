@@ -1,12 +1,12 @@
 #!/bin/bash
-# task=Hopper-v3
+# task=Walker2d-v3
 # task_data_type="low"
-# task_train_num=1000
+# task_train_num=100
 # data_dir=None
 # init_num_model=7
 # num_model=5
 # H=10
-# epoch_per_div_update=1
+# epoch_per_div_update=2
 # model_retrain_epochs=100 
 # actor_lr=1e-4
 # div_lr=3e-5
@@ -16,7 +16,7 @@
 lam=0
 reward_type=mean_reward
 # seed=0
-# num_worker=4
+# num_worker=1
 python required.py
 
 python neorl_worker.py --algo_name=maple_div_neorl \
